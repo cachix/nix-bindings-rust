@@ -655,34 +655,44 @@ impl EvalState {
     #[doc(alias = "attribute")]
     #[doc(alias = "field")]
     pub fn require_attrs_select(&mut self, v: &Value, attr_name: &str) -> Result<Value> {
-        let t = self.value_type(v)?;
-        if t != ValueType::AttrSet {
-            bail!("expected an attrset, but got a {:?}", t);
-        }
-        let attr_name = CString::new(attr_name)
-            .with_context(|| "require_attrs_select: attrName contains null byte")?;
-        unsafe {
-            let v2 = check_call!(raw::get_attr_byname(
-                &mut self.context,
-                v.raw_ptr(),
-                self.eval_state.as_ptr(),
-                attr_name.as_ptr()
-            ));
-            match v2 {
-                Ok(v2) => Ok(Value::new(v2)),
-                Err(e) => {
-                    // As of Nix 2.26, the error message is not helpful when it
-                    // is simply missing, so we provide a better one. (Note that
-                    // missing attributes requested by Nix expressions OTOH is a
-                    // different error message which works fine.)
-                    if e.to_string() == "missing attribute" {
-                        bail!("attribute `{}` not found", attr_name.to_string_lossy());
-                    } else {
-                        Err(e)
+        // Split on dots to support nested attribute paths like "devenv.packages"
+        let parts: Vec<&str> = attr_name.split('.').collect();
+        let mut current = v.clone();
+
+        for part in parts {
+            let t = self.value_type(&current)?;
+            if t != ValueType::AttrSet {
+                bail!("expected an attrset, but got a {:?}", t);
+            }
+
+            let part_cstr = CString::new(part)
+                .with_context(|| "require_attrs_select: attrName contains null byte")?;
+
+            unsafe {
+                let v2 = check_call!(raw::get_attr_byname(
+                    &mut self.context,
+                    current.raw_ptr(),
+                    self.eval_state.as_ptr(),
+                    part_cstr.as_ptr()
+                ));
+                current = match v2 {
+                    Ok(v2) => Value::new(v2),
+                    Err(e) => {
+                        // As of Nix 2.26, the error message is not helpful when it
+                        // is simply missing, so we provide a better one. (Note that
+                        // missing attributes requested by Nix expressions OTOH is a
+                        // different error message which works fine.)
+                        if e.to_string() == "missing attribute" {
+                            bail!("attribute `{}` not found", attr_name);
+                        } else {
+                            return Err(e);
+                        }
                     }
-                }
+                };
             }
         }
+
+        Ok(current)
     }
 
     /// Extracts an optional attribute value from an [attribute set][`ValueType::AttrSet`] Nix value.
@@ -1572,6 +1582,72 @@ mod tests {
                 Err(e) => {
                     if !e.to_string().contains("oh no the error") {
                         eprintln!("unexpected error message: {}", e);
+                        assert!(false);
+                    }
+                }
+            }
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn eval_state_require_attrs_select_nested() {
+        gc_registering_current_thread(|| {
+            let store = Store::open(None, HashMap::new()).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
+
+            // Test basic nested path (2 levels)
+            let expr = r#"{ devenv = { packages = "pkg1 pkg2"; shell = "bash"; }; }"#;
+            let v = es.eval_from_string(expr, "<test>").unwrap();
+            let packages = es.require_attrs_select(&v, "devenv.packages").unwrap();
+            assert_eq!(es.require_string(&packages).unwrap(), "pkg1 pkg2");
+
+            // Test deeper nesting (3 levels)
+            let expr = r#"{ a = { b = { c = 42; }; }; }"#;
+            let v = es.eval_from_string(expr, "<test>").unwrap();
+            let deep = es.require_attrs_select(&v, "a.b.c").unwrap();
+            assert_eq!(es.require_int(&deep).unwrap(), 42);
+
+            // Test missing nested attribute
+            let expr = r#"{ devenv = { packages = "pkg1"; }; }"#;
+            let v = es.eval_from_string(expr, "<test>").unwrap();
+            let missing = es.require_attrs_select(&v, "devenv.missing");
+            match missing {
+                Ok(_) => panic!("expected an error for missing nested attribute"),
+                Err(e) => {
+                    let s = format!("{e:#}");
+                    if !s.contains("attribute `devenv.missing` not found") {
+                        eprintln!("unexpected error message: {}", s);
+                        assert!(false);
+                    }
+                }
+            }
+
+            // Test type error in middle of path (intermediate value is not an attrset)
+            let expr = r#"{ devenv = "not-an-attrset"; }"#;
+            let v = es.eval_from_string(expr, "<test>").unwrap();
+            let type_error = es.require_attrs_select(&v, "devenv.packages");
+            match type_error {
+                Ok(_) => panic!("expected an error for non-attrset intermediate value"),
+                Err(e) => {
+                    let s = format!("{e:#}");
+                    if !s.contains("expected an attrset, but got a String") {
+                        eprintln!("unexpected error message: {}", s);
+                        assert!(false);
+                    }
+                }
+            }
+
+            // Test missing first level attribute
+            let expr = r#"{ other = { val = 1; }; }"#;
+            let v = es.eval_from_string(expr, "<test>").unwrap();
+            let missing_first = es.require_attrs_select(&v, "devenv.packages");
+            match missing_first {
+                Ok(_) => panic!("expected an error for missing first-level attribute"),
+                Err(e) => {
+                    let s = format!("{e:#}");
+                    if !s.contains("attribute `devenv.packages` not found") {
+                        eprintln!("unexpected error message: {}", s);
                         assert!(false);
                     }
                 }
