@@ -695,6 +695,152 @@ impl<'a> InputsLocker<'a> {
     }
 }
 
+/// Locking mode for flake inputs
+#[derive(Debug, Clone, Copy)]
+pub enum LockMode {
+    /// Compute locks and write to disk if changes are needed
+    WriteAsNeeded,
+    /// Compute locks in memory only, don't write to disk
+    Virtual,
+    /// Check if locks are up-to-date, fail if updates are needed
+    Check,
+}
+
+/// High-level builder for locking flake inputs with fluent API
+///
+/// Provides a convenient way to lock flake inputs with support for:
+/// - Batch input updates (ignore existing locks)
+/// - Batch input overrides (replace with specific references)
+/// - Multiple locking modes
+///
+/// # Example
+/// ```ignore
+/// let lock_file = InputsLocker::new(&flake_settings)
+///     .with_inputs(inputs)
+///     .source_path("/path/to/flake")
+///     .old_lock_file(&existing_lock)
+///     .update_inputs(&["nixpkgs", "rust-overlay"])
+///     .override_input("custom", &custom_ref)
+///     .mode(LockMode::WriteAsNeeded)
+///     .lock(&fetch_settings, &eval_state)?;
+/// ```
+pub struct InputsLocker<'a> {
+    flake_settings: &'a FlakeSettings,
+    inputs: Option<FlakeInputs>,
+    source_path: Option<String>,
+    old_lock: Option<&'a LockFile>,
+    updates: Vec<String>,
+    overrides: Vec<(String, &'a FlakeReference)>,
+    mode: LockMode,
+}
+
+impl<'a> InputsLocker<'a> {
+    /// Create a new InputsLocker with the given flake settings
+    pub fn new(flake_settings: &'a FlakeSettings) -> Self {
+        Self {
+            flake_settings,
+            inputs: None,
+            source_path: None,
+            old_lock: None,
+            updates: Vec::new(),
+            overrides: Vec::new(),
+            mode: LockMode::WriteAsNeeded,
+        }
+    }
+
+    /// Set the inputs to lock
+    pub fn with_inputs(mut self, inputs: FlakeInputs) -> Self {
+        self.inputs = Some(inputs);
+        self
+    }
+
+    /// Set the source path for resolving relative references
+    pub fn source_path(mut self, path: impl Into<String>) -> Self {
+        self.source_path = Some(path.into());
+        self
+    }
+
+    /// Set the old lock file to use as basis for incremental updates
+    pub fn old_lock_file(mut self, lock: &'a LockFile) -> Self {
+        self.old_lock = Some(lock);
+        self
+    }
+
+    /// Mark a single input for update (ignore its existing lock)
+    pub fn update_input(mut self, input: impl Into<String>) -> Self {
+        self.updates.push(input.into());
+        self
+    }
+
+    /// Mark multiple inputs for update (batch operation)
+    pub fn update_inputs<I, S>(mut self, inputs: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.updates.extend(inputs.into_iter().map(|s| s.into()));
+        self
+    }
+
+    /// Override a single input with a specific flake reference
+    pub fn override_input(mut self, path: impl Into<String>, ref_: &'a FlakeReference) -> Self {
+        self.overrides.push((path.into(), ref_));
+        self
+    }
+
+    /// Set multiple input overrides (batch operation)
+    pub fn overrides<I>(mut self, overrides: I) -> Self
+    where
+        I: IntoIterator<Item = (String, &'a FlakeReference)>,
+    {
+        self.overrides.extend(overrides);
+        self
+    }
+
+    /// Set the locking mode
+    pub fn mode(mut self, mode: LockMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Execute the locking operation with all accumulated settings
+    pub fn lock(
+        self,
+        fetch_settings: &FetchersSettings,
+        eval_state: &EvalState,
+    ) -> Result<LockFile> {
+        // Create flags with the specified mode
+        let mut flags = FlakeLockFlags::new(self.flake_settings)?;
+
+        match self.mode {
+            LockMode::WriteAsNeeded => flags.set_mode_write_as_needed()?,
+            LockMode::Virtual => flags.set_mode_virtual()?,
+            LockMode::Check => flags.set_mode_check()?,
+        }
+
+        // Add all input updates
+        for input_path in self.updates {
+            flags.add_input_update(&input_path)?;
+        }
+
+        // Add all input overrides
+        for (input_path, flake_ref) in self.overrides {
+            flags.add_input_override(&input_path, flake_ref)?;
+        }
+
+        // Lock the inputs
+        lock_inputs(
+            fetch_settings,
+            self.flake_settings,
+            eval_state,
+            self.inputs.context("inputs must be set")?,
+            &self.source_path.context("source_path must be set")?,
+            self.old_lock,
+            &flags,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use nix_bindings_expr::eval_state::{gc_register_my_thread, EvalStateBuilder};
