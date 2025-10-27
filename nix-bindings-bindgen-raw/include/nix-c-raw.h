@@ -7,3 +7,4 @@
 #include <nix_api_value.h>
 #include <nix_api_flake.h>
 #include <nix_api_repl.h>
+#include <nix_api_build_env.h>
