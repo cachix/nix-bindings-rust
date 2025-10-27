@@ -13,6 +13,7 @@ fn main() {
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=include/nix-c-raw.h");
     println!("cargo:rustc-link-lib=nixflake");
+    println!("cargo:rustc-link-lib=nixcmd");
 
     // https://rust-lang.github.io/rust-bindgen/library-usage.html
     let bindings = bindgen::Builder::default()
@@ -47,6 +48,14 @@ fn c_headers() -> Vec<String> {
     }
 
     for path in pkg_config::probe_library("bdw-gc")
+        .unwrap()
+        .include_paths
+        .iter()
+    {
+        args.push(format!("-I{}", path.to_str().unwrap()));
+    }
+
+    for path in pkg_config::probe_library("nix-cmd-c")
         .unwrap()
         .include_paths
         .iter()

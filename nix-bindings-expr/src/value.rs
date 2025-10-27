@@ -98,7 +98,7 @@ impl Value {
     /// # Safety
     ///
     /// The caller must ensure that the returned pointer is not used after the `Value` is dropped.
-    pub(crate) unsafe fn raw_ptr(&self) -> *mut raw::Value {
+    pub unsafe fn raw_ptr(&self) -> *mut raw::Value {
         self.inner.as_ptr()
     }
 }
