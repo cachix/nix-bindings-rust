@@ -199,6 +199,21 @@ impl FlakeLockFlags {
         }?;
         Ok(())
     }
+    /// Marks an input for update, ignoring its existing lock entry
+    pub fn add_input_update(&mut self, input_path: &str) -> Result<()> {
+        let mut ctx = Context::new();
+        unsafe {
+            context::check_call!(raw::flake_lock_flags_add_input_update(
+                &mut ctx,
+                self.ptr,
+                CString::new(input_path)
+                    .context("Failed to create CString for input_path")?
+                    .as_ptr(),
+                input_path.len()
+            ))
+        }?;
+        Ok(())
+    }
 }
 
 pub struct LockedFlake {
@@ -250,6 +265,433 @@ impl LockedFlake {
             ))?;
             Ok(nix_bindings_expr::value::__private::raw_value_new(r))
         }
+    }
+}
+
+/// A single flake input specification
+pub struct FlakeInput {
+    pub(crate) ptr: NonNull<raw::flake_input>,
+}
+impl Drop for FlakeInput {
+    fn drop(&mut self) {
+        unsafe {
+            raw::flake_input_free(self.ptr.as_ptr());
+        }
+    }
+}
+impl FlakeInput {
+    /// Create a new flake input from a flake reference
+    pub fn new(flake_ref: &FlakeReference, is_flake: bool) -> Result<Self> {
+        let mut ctx = Context::new();
+        let ptr = unsafe {
+            context::check_call!(raw::flake_input_new(
+                &mut ctx,
+                flake_ref.ptr.as_ptr(),
+                is_flake
+            ))
+        }?;
+        let ptr = NonNull::new(ptr).context("flake_input_new unexpectedly returned null")?;
+        Ok(FlakeInput { ptr })
+    }
+}
+
+/// A collection of flake inputs
+pub struct FlakeInputs {
+    pub(crate) ptr: NonNull<raw::flake_inputs>,
+}
+impl Drop for FlakeInputs {
+    fn drop(&mut self) {
+        unsafe {
+            raw::flake_inputs_free(self.ptr.as_ptr());
+        }
+    }
+}
+impl FlakeInputs {
+    /// Create a new empty collection of flake inputs
+    pub fn new() -> Result<Self> {
+        let mut ctx = Context::new();
+        let ptr = unsafe { context::check_call!(raw::flake_inputs_new(&mut ctx)) }?;
+        let ptr = NonNull::new(ptr).context("flake_inputs_new unexpectedly returned null")?;
+        Ok(FlakeInputs { ptr })
+    }
+
+    /// Add an input to the collection
+    pub fn add(&mut self, name: &str, input: FlakeInput) -> Result<()> {
+        let mut ctx = Context::new();
+        unsafe {
+            context::check_call!(raw::flake_inputs_add(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                name.as_ptr() as *const c_char,
+                name.len(),
+                input.ptr.as_ptr()
+            ))
+        }?;
+        // Ownership transferred to inputs collection, prevent double-free
+        std::mem::forget(input);
+        Ok(())
+    }
+}
+
+/// A flake lock file
+pub struct LockFile {
+    pub(crate) ptr: NonNull<raw::lock_file>,
+}
+impl Drop for LockFile {
+    fn drop(&mut self) {
+        unsafe {
+            raw::lock_file_free(self.ptr.as_ptr());
+        }
+    }
+}
+impl LockFile {
+    /// Create a new empty lock file
+    pub fn new() -> Result<Self> {
+        let mut ctx = Context::new();
+        let ptr = unsafe { context::check_call!(raw::lock_file_new(&mut ctx)) }?;
+        let ptr = NonNull::new(ptr).context("lock_file_new unexpectedly returned null")?;
+        Ok(LockFile { ptr })
+    }
+
+    /// Parse a lock file from JSON string
+    pub fn parse(
+        fetch_settings: &FetchersSettings,
+        content: &str,
+        source_path: Option<&str>,
+    ) -> Result<Self> {
+        let mut ctx = Context::new();
+        let (src_ptr, src_len) = match source_path {
+            Some(s) => (s.as_ptr() as *const c_char, s.len()),
+            None => (std::ptr::null(), 0),
+        };
+        let ptr = unsafe {
+            context::check_call!(raw::lock_file_parse(
+                &mut ctx,
+                fetch_settings.raw_ptr(),
+                content.as_ptr() as *const c_char,
+                content.len(),
+                src_ptr,
+                src_len
+            ))
+        }?;
+        let ptr = NonNull::new(ptr).context("lock_file_parse unexpectedly returned null")?;
+        Ok(LockFile { ptr })
+    }
+
+    /// Convert lock file to JSON string
+    pub fn to_string(&self) -> Result<String> {
+        let mut ctx = Context::new();
+        let mut r = result_string_init!();
+        unsafe {
+            context::check_call!(raw::lock_file_to_string(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        r
+    }
+
+    /// Compare two lock files for equality
+    pub fn equals(&self, other: &LockFile) -> Result<bool> {
+        let mut ctx = Context::new();
+        let mut are_equal = false;
+        unsafe {
+            context::check_call!(raw::lock_file_equals(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                other.ptr.as_ptr(),
+                &mut are_equal
+            ))
+        }?;
+        Ok(are_equal)
+    }
+
+    /// Generate a human-readable diff showing what changed between two lock files
+    ///
+    /// Returns a string with ANSI color codes showing added inputs (green),
+    /// removed inputs (red), and updated inputs (bold).
+    pub fn diff(&self, other: &LockFile) -> Result<String> {
+        let mut ctx = Context::new();
+        let mut r = result_string_init!();
+        unsafe {
+            context::check_call!(raw::lock_file_diff(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                other.ptr.as_ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        r
+    }
+
+    /// Check if this lock file has any changes compared to another
+    pub fn has_changes(&self, other: &LockFile) -> Result<bool> {
+        Ok(!self.equals(other)?)
+    }
+
+    /// Create an iterator over all inputs in this lock file
+    pub fn inputs_iterator(&self) -> Result<LockFileInputsIterator> {
+        let mut ctx = Context::new();
+        let ptr = unsafe {
+            context::check_call!(raw::lock_file_inputs_iterator_new(
+                &mut ctx,
+                self.ptr.as_ptr()
+            ))
+        }?;
+        let ptr = NonNull::new(ptr)
+            .context("lock_file_inputs_iterator_new unexpectedly returned null")?;
+        Ok(LockFileInputsIterator { ptr })
+    }
+}
+
+/// Iterator over inputs in a lock file
+pub struct LockFileInputsIterator {
+    ptr: NonNull<raw::lock_file_inputs_iterator>,
+}
+
+impl Drop for LockFileInputsIterator {
+    fn drop(&mut self) {
+        unsafe {
+            raw::lock_file_inputs_iterator_free(self.ptr.as_ptr());
+        }
+    }
+}
+
+impl LockFileInputsIterator {
+    /// Advance to the next input and return true if valid, false if at end
+    pub fn next(&mut self) -> bool {
+        unsafe { raw::lock_file_inputs_iterator_next(self.ptr.as_ptr()) }
+    }
+
+    /// Get the attribute path of the current input (e.g., "nixpkgs" or "nix/nixpkgs")
+    pub fn attr_path(&self) -> Result<String> {
+        let mut ctx = Context::new();
+        let mut r = result_string_init!();
+        unsafe {
+            context::check_call!(raw::lock_file_inputs_iterator_get_attr_path(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        r
+    }
+
+    /// Get the locked flake reference of the current input as a string
+    /// For example: "github:NixOS/nixpkgs/6a08e6bb4e46ff7fcbb53d409b253f6bad8a28ce"
+    pub fn locked_ref(&self) -> Result<String> {
+        let mut ctx = Context::new();
+        let mut r = result_string_init!();
+        unsafe {
+            context::check_call!(raw::lock_file_inputs_iterator_get_locked_ref(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        r
+    }
+
+    /// Get the original flake reference of the current input as a string
+    pub fn original_ref(&self) -> Result<String> {
+        let mut ctx = Context::new();
+        let mut r = result_string_init!();
+        unsafe {
+            context::check_call!(raw::lock_file_inputs_iterator_get_original_ref(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        r
+    }
+}
+
+/// Lock inputs without reading a top-level flake.nix
+///
+/// This function takes manually-constructed flake inputs and computes
+/// a lock file. EvalState is still required because transitive flake
+/// inputs need to be fetched and evaluated.
+pub fn lock_inputs(
+    fetch_settings: &FetchersSettings,
+    flake_settings: &FlakeSettings,
+    eval_state: &EvalState,
+    inputs: FlakeInputs,
+    source_path: &str,
+    old_lock_file: Option<&LockFile>,
+    flags: &FlakeLockFlags,
+) -> Result<LockFile> {
+    let mut ctx = Context::new();
+    let old_lock_ptr = match old_lock_file {
+        Some(lf) => lf.ptr.as_ptr(),
+        None => std::ptr::null_mut(),
+    };
+    let ptr = unsafe {
+        context::check_call!(raw::flake_lock_inputs(
+            &mut ctx,
+            fetch_settings.raw_ptr(),
+            flake_settings.ptr,
+            eval_state.raw_ptr(),
+            inputs.ptr.as_ptr(),
+            source_path.as_ptr() as *const c_char,
+            source_path.len(),
+            old_lock_ptr,
+            flags.ptr
+        ))
+    }?;
+    let ptr = NonNull::new(ptr).context("flake_lock_inputs unexpectedly returned null")?;
+    Ok(LockFile { ptr })
+}
+
+/// Locking mode for flake inputs
+#[derive(Debug, Clone, Copy)]
+pub enum LockMode {
+    /// Compute locks and write to disk if changes are needed
+    WriteAsNeeded,
+    /// Compute locks in memory only, don't write to disk
+    Virtual,
+    /// Check if locks are up-to-date, fail if updates are needed
+    Check,
+}
+
+/// High-level builder for locking flake inputs with fluent API
+///
+/// Provides a convenient way to lock flake inputs with support for:
+/// - Batch input updates (ignore existing locks)
+/// - Batch input overrides (replace with specific references)
+/// - Multiple locking modes
+///
+/// # Example
+/// ```ignore
+/// let lock_file = InputsLocker::new(&flake_settings)
+///     .with_inputs(inputs)
+///     .source_path("/path/to/flake")
+///     .old_lock_file(&existing_lock)
+///     .update_inputs(&["nixpkgs", "rust-overlay"])
+///     .override_input("custom", &custom_ref)
+///     .mode(LockMode::WriteAsNeeded)
+///     .lock(&fetch_settings, &eval_state)?;
+/// ```
+pub struct InputsLocker<'a> {
+    flake_settings: &'a FlakeSettings,
+    inputs: Option<FlakeInputs>,
+    source_path: Option<String>,
+    old_lock: Option<&'a LockFile>,
+    updates: Vec<String>,
+    overrides: Vec<(String, &'a FlakeReference)>,
+    mode: LockMode,
+}
+
+impl<'a> InputsLocker<'a> {
+    /// Create a new InputsLocker with the given flake settings
+    pub fn new(flake_settings: &'a FlakeSettings) -> Self {
+        Self {
+            flake_settings,
+            inputs: None,
+            source_path: None,
+            old_lock: None,
+            updates: Vec::new(),
+            overrides: Vec::new(),
+            mode: LockMode::WriteAsNeeded,
+        }
+    }
+
+    /// Set the inputs to lock
+    pub fn with_inputs(mut self, inputs: FlakeInputs) -> Self {
+        self.inputs = Some(inputs);
+        self
+    }
+
+    /// Set the source path for resolving relative references
+    pub fn source_path(mut self, path: impl Into<String>) -> Self {
+        self.source_path = Some(path.into());
+        self
+    }
+
+    /// Set the old lock file to use as basis for incremental updates
+    pub fn old_lock_file(mut self, lock: &'a LockFile) -> Self {
+        self.old_lock = Some(lock);
+        self
+    }
+
+    /// Mark a single input for update (ignore its existing lock)
+    pub fn update_input(mut self, input: impl Into<String>) -> Self {
+        self.updates.push(input.into());
+        self
+    }
+
+    /// Mark multiple inputs for update (batch operation)
+    pub fn update_inputs<I, S>(mut self, inputs: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.updates.extend(inputs.into_iter().map(|s| s.into()));
+        self
+    }
+
+    /// Override a single input with a specific flake reference
+    pub fn override_input(mut self, path: impl Into<String>, ref_: &'a FlakeReference) -> Self {
+        self.overrides.push((path.into(), ref_));
+        self
+    }
+
+    /// Set multiple input overrides (batch operation)
+    pub fn overrides<I>(mut self, overrides: I) -> Self
+    where
+        I: IntoIterator<Item = (String, &'a FlakeReference)>,
+    {
+        self.overrides.extend(overrides);
+        self
+    }
+
+    /// Set the locking mode
+    pub fn mode(mut self, mode: LockMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Execute the locking operation with all accumulated settings
+    pub fn lock(
+        self,
+        fetch_settings: &FetchersSettings,
+        eval_state: &EvalState,
+    ) -> Result<LockFile> {
+        // Create flags with the specified mode
+        let mut flags = FlakeLockFlags::new(self.flake_settings)?;
+
+        match self.mode {
+            LockMode::WriteAsNeeded => flags.set_mode_write_as_needed()?,
+            LockMode::Virtual => flags.set_mode_virtual()?,
+            LockMode::Check => flags.set_mode_check()?,
+        }
+
+        // Add all input updates
+        for input_path in self.updates {
+            flags.add_input_update(&input_path)?;
+        }
+
+        // Add all input overrides
+        for (input_path, flake_ref) in self.overrides {
+            flags.add_input_override(&input_path, flake_ref)?;
+        }
+
+        // Lock the inputs
+        lock_inputs(
+            fetch_settings,
+            self.flake_settings,
+            eval_state,
+            self.inputs.context("inputs must be set")?,
+            &self.source_path.context("source_path must be set")?,
+            self.old_lock,
+            &flags,
+        )
     }
 }
 
