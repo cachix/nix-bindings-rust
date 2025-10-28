@@ -434,6 +434,78 @@ impl Store {
         Ok(r)
     }
 
+    /// Perform garbage collection on the store.
+    ///
+    /// This function provides flexible garbage collection with different modes:
+    /// - ReturnLive: Returns paths reachable from GC roots (live paths)
+    /// - ReturnDead: Returns paths not reachable from GC roots (dead paths)
+    /// - DeleteDead: Deletes all dead paths
+    /// - DeleteSpecific: Deletes specific paths from the `paths_to_delete` argument,
+    ///   but only if they are not reachable from GC roots (respects liveness)
+    ///
+    /// # Arguments
+    /// * `action` - The garbage collection action to perform
+    /// * `paths_to_delete` - For DeleteSpecific: paths to consider for deletion. None for other actions.
+    /// * `ignore_liveness` - If true, ignore reachability from roots (dangerous!).
+    ///   Only has effect with DeleteSpecific.
+    /// * `max_freed` - Stop after freeing this many bytes. 0 means no limit.
+    ///
+    /// # Returns
+    /// A tuple of (result_paths, bytes_freed). The result_paths are:
+    /// - For ReturnLive: paths reachable from roots
+    /// - For ReturnDead: paths not reachable from roots
+    /// - For DeleteDead/DeleteSpecific: paths that were deleted
+    #[doc(alias = "nix_bindings_store_collect_garbage")]
+    pub fn collect_garbage(
+        &mut self,
+        action: GcAction,
+        paths_to_delete: Option<&[&StorePath]>,
+        ignore_liveness: bool,
+        max_freed: u64,
+    ) -> Result<(Vec<StorePath>, u64)> {
+        let mut result_paths = Vec::new();
+        let result_ptr = &mut result_paths as *mut Vec<StorePath>;
+        let mut bytes_freed: u64 = 0;
+
+        extern "C" fn callback(path: *const raw::StorePath, user_data: *mut std::ffi::c_void) {
+            unsafe {
+                // Clone the path to add it to the result vector
+                let store_path =
+                    StorePath::new_raw_clone(NonNull::new(path as *mut raw::StorePath).unwrap());
+                let result = &mut *(user_data as *mut Vec<StorePath>);
+                result.push(store_path);
+            }
+        }
+
+        // Convert paths_to_delete if provided
+        let paths_vec: Vec<*mut raw::StorePath> = paths_to_delete
+            .unwrap_or_default()
+            .iter()
+            .map(|p| unsafe { p.as_ptr() })
+            .collect();
+
+        unsafe {
+            check_call!(raw::store_collect_garbage(
+                &mut self.context,
+                self.inner.ptr(),
+                action.to_raw(),
+                if paths_vec.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    paths_vec.as_ptr() as *mut *mut raw::StorePath
+                },
+                paths_vec.len(),
+                ignore_liveness,
+                max_freed,
+                Some(callback),
+                result_ptr as *mut std::ffi::c_void,
+                &mut bytes_freed
+            ))
+        }?;
+
+        Ok((result_paths, bytes_freed))
+    }
+
     pub fn weak_ref(&self) -> StoreWeak {
         StoreWeak {
             inner: Arc::downgrade(&self.inner),
