@@ -16,6 +16,30 @@ use std::sync::{Arc, Mutex, Weak};
 use crate::derivation::Derivation;
 use crate::path::StorePath;
 
+/// Garbage collection action types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GcAction {
+    /// Return the set of live paths (reachable from roots)
+    ReturnLive,
+    /// Return the set of dead paths (not reachable from roots)
+    ReturnDead,
+    /// Delete all dead paths
+    DeleteDead,
+    /// Delete only the specific paths provided (if they are dead)
+    DeleteSpecific,
+}
+
+impl GcAction {
+    fn to_raw(self) -> raw::gc_action {
+        match self {
+            GcAction::ReturnLive => raw::gc_action_NIX_GC_RETURN_LIVE,
+            GcAction::ReturnDead => raw::gc_action_NIX_GC_RETURN_DEAD,
+            GcAction::DeleteDead => raw::gc_action_NIX_GC_DELETE_DEAD,
+            GcAction::DeleteSpecific => raw::gc_action_NIX_GC_DELETE_SPECIFIC,
+        }
+    }
+}
+
 /* TODO make Nix itself thread safe */
 lazy_static! {
     static ref INIT: Result<()> = unsafe {
