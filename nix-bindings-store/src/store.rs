@@ -563,6 +563,97 @@ impl Store {
         Ok(())
     }
 
+    /// Add a substituter to this store at runtime.
+    ///
+    /// # Arguments
+    /// * `uri` - The substituter URI (e.g., "https://cache.nixos.org")
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error if the substituter could not be added
+    #[doc(alias = "nix_bindings_store_add_substituter")]
+    pub fn add_substituter(&mut self, uri: &str) -> Result<()> {
+        let uri_cstring = CString::new(uri)?;
+        unsafe {
+            let err_code = raw::store_add_substituter(
+                self.context.ptr(),
+                self.inner.ptr(),
+                uri_cstring.as_ptr(),
+            );
+            if err_code != raw::err_NIX_OK {
+                self.context.check_err()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove a substituter from this store.
+    ///
+    /// # Arguments
+    /// * `uri` - The substituter URI to remove
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error if the substituter was not found
+    #[doc(alias = "nix_bindings_store_remove_substituter")]
+    pub fn remove_substituter(&mut self, uri: &str) -> Result<()> {
+        let uri_cstring = CString::new(uri)?;
+        unsafe {
+            let err_code = raw::store_remove_substituter(
+                self.context.ptr(),
+                self.inner.ptr(),
+                uri_cstring.as_ptr(),
+            );
+            if err_code != raw::err_NIX_OK {
+                self.context.check_err()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Get all substituters for this store.
+    ///
+    /// # Returns
+    /// A vector of (URI, priority) tuples for each substituter
+    #[doc(alias = "nix_bindings_store_list_substituters")]
+    pub fn list_substituters(&mut self) -> Result<Vec<(String, i32)>> {
+        let mut result = Vec::new();
+        let result_ptr = &mut result as *mut Vec<(String, i32)>;
+
+        extern "C" fn callback(
+            uri: *const c_char,
+            priority: i32,
+            user_data: *mut std::ffi::c_void,
+        ) {
+            unsafe {
+                let uri_str = std::ffi::CStr::from_ptr(uri).to_string_lossy().into_owned();
+                let result = &mut *(user_data as *mut Vec<(String, i32)>);
+                result.push((uri_str, priority));
+            }
+        }
+
+        unsafe {
+            check_call!(raw::store_list_substituters(
+                &mut self.context,
+                self.inner.ptr(),
+                Some(callback),
+                result_ptr as *mut std::ffi::c_void
+            ))
+        }?;
+
+        Ok(result)
+    }
+
+    /// Clear all substituters from this store.
+    #[doc(alias = "nix_bindings_store_clear_substituters")]
+    pub fn clear_substituters(&mut self) -> Result<()> {
+        unsafe {
+            let err_code = raw::store_clear_substituters(self.context.ptr(), self.inner.ptr());
+            if err_code != raw::err_NIX_OK {
+                self.context.check_err()?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn weak_ref(&self) -> StoreWeak {
         StoreWeak {
             inner: Arc::downgrade(&self.inner),
@@ -1132,5 +1223,35 @@ mod tests {
 
         drop(store);
         drop(temp_dir);
+    }
+
+    #[test]
+    fn list_substituters_works() {
+        let mut store = Store::open(None, HashMap::new()).unwrap();
+        let subs = store.list_substituters().unwrap();
+        // Should have at least the default substituter
+        assert!(!subs.is_empty());
+    }
+
+    #[test]
+    fn add_substituter_works() {
+        let mut store = Store::open_uncached(None, HashMap::new()).unwrap();
+        let result = store.add_substituter("https://test.example.com");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn remove_substituter_works() {
+        let mut store = Store::open_uncached(None, HashMap::new()).unwrap();
+        store.add_substituter("https://test.example.com").unwrap();
+        let result = store.remove_substituter("https://test.example.com");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn clear_substituters_works() {
+        let mut store = Store::open_uncached(None, HashMap::new()).unwrap();
+        let result = store.clear_substituters();
+        assert!(result.is_ok());
     }
 }
