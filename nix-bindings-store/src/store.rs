@@ -8,6 +8,7 @@ use std::collections::HashMap;
 #[cfg(nix_at_least = "2.33")]
 use std::collections::BTreeMap;
 use std::ffi::{c_char, CString};
+use std::path::Path;
 use std::ptr::null_mut;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, Weak};
@@ -504,6 +505,62 @@ impl Store {
         }?;
 
         Ok((result_paths, bytes_freed))
+    }
+
+    /// Add a permanent GC root for a store path.
+    ///
+    /// Creates a symlink at `gc_root` that points to the store path, and registers it as
+    /// a GC root so the path will not be garbage collected.
+    ///
+    /// # Arguments
+    /// * `path` - The store path to root
+    /// * `gc_root` - The filesystem path where the GC root symlink will be created
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error if the GC root could not be added
+    #[doc(alias = "nix_bindings_store_add_perm_root")]
+    pub fn add_perm_root(&mut self, path: &StorePath, gc_root: &Path) -> Result<()> {
+        let gc_root_cstring = CString::new(
+            gc_root
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("GC root path is not valid UTF-8"))?,
+        )?;
+        unsafe {
+            check_call!(raw::store_add_perm_root(
+                &mut self.context,
+                self.inner.ptr(),
+                path.as_ptr(),
+                gc_root_cstring.as_ptr()
+            ))
+        }?;
+        Ok(())
+    }
+
+    /// Add an indirect GC root for a store path.
+    ///
+    /// Adds an indirect (weak) reference GC root that points to `symlink_path`.
+    /// This is used internally by add_perm_root on stores that support it.
+    ///
+    /// # Arguments
+    /// * `symlink_path` - The filesystem path to the symlink created by add_perm_root
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error if the GC root could not be added
+    #[doc(alias = "nix_bindings_store_add_indirect_root")]
+    pub fn add_indirect_root(&mut self, symlink_path: &Path) -> Result<()> {
+        let symlink_cstring = CString::new(
+            symlink_path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("Symlink path is not valid UTF-8"))?,
+        )?;
+        unsafe {
+            check_call!(raw::store_add_indirect_root(
+                &mut self.context,
+                self.inner.ptr(),
+                symlink_cstring.as_ptr()
+            ))
+        }?;
+        Ok(())
     }
 
     pub fn weak_ref(&self) -> StoreWeak {
