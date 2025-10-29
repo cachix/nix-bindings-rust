@@ -362,6 +362,39 @@ impl EvalState {
         }
     }
 
+    /// Enables the interactive debugger.
+    ///
+    /// When the debugger is enabled, any evaluation error will automatically enter
+    /// an interactive REPL where you can inspect the error context and variables.
+    /// This is equivalent to the `--debugger` CLI flag.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread};
+    /// # use nix_bindings_store::store::Store;
+    /// # use std::collections::HashMap;
+    /// # fn main() -> anyhow::Result<()> {
+    /// # test_init();
+    /// # let guard = gc_register_my_thread()?;
+    /// # let mut es = EvalState::new(Store::open(None, HashMap::new())?, [])?;
+    /// es.enable_debugger()?;
+    /// // Now any evaluation error will enter the REPL
+    /// # drop(guard);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[doc(alias = "nix_evalstate_enable_debugger")]
+    pub fn enable_debugger(&mut self) -> Result<()> {
+        unsafe {
+            check_call!(raw::evalstate_enable_debugger(
+                &mut self.context,
+                self.eval_state.as_ptr()
+            ))?;
+        }
+        Ok(())
+    }
+
     /// Parses and evaluates a Nix expression `expr`.
     ///
     /// Expressions can contain relative paths such as `./.` that are resolved relative to the given `path`.
