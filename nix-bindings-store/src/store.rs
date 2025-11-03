@@ -2,11 +2,13 @@ use anyhow::{bail, Error, Result};
 use lazy_static::lazy_static;
 use nix_bindings_bindgen_raw as raw;
 use nix_bindings_util::context::Context;
-use nix_bindings_util::string_return::{callback_get_result_string, callback_get_result_string_data};
+use nix_bindings_util::string_return::{
+    callback_get_result_string, callback_get_result_string_data,
+};
 use nix_bindings_util::{check_call, result_string_init};
-use std::collections::HashMap;
 #[cfg(nix_at_least = "2.33")]
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::ffi::{c_char, CString};
 use std::path::Path;
 use std::ptr::null_mut;
@@ -37,6 +39,28 @@ impl GcAction {
             GcAction::ReturnDead => raw::gc_action_NIX_GC_RETURN_DEAD,
             GcAction::DeleteDead => raw::gc_action_NIX_GC_DELETE_DEAD,
             GcAction::DeleteSpecific => raw::gc_action_NIX_GC_DELETE_SPECIFIC,
+        }
+    }
+}
+
+/// Client trust status for a connection to the store
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustedFlag {
+    /// Client is trusted by the store
+    Trusted,
+    /// Client is not trusted by the store
+    NotTrusted,
+    /// Trust status is not applicable for this store type (e.g., HTTP binary caches)
+    Unknown,
+}
+
+impl TrustedFlag {
+    fn from_raw(raw: raw::trusted_flag) -> Self {
+        match raw {
+            raw::trusted_flag_NIX_TRUSTED_FLAG_TRUSTED => TrustedFlag::Trusted,
+            raw::trusted_flag_NIX_TRUSTED_FLAG_NOT_TRUSTED => TrustedFlag::NotTrusted,
+            raw::trusted_flag_NIX_TRUSTED_FLAG_UNKNOWN => TrustedFlag::Unknown,
+            _ => TrustedFlag::Unknown,
         }
     }
 }
@@ -334,8 +358,8 @@ impl Store {
                 self.inner.ptr(),
                 drv.inner.as_ptr()
             ))?;
-            let path = NonNull::new(path)
-                .ok_or_else(|| Error::msg("add_derivation returned null"))?;
+            let path =
+                NonNull::new(path).ok_or_else(|| Error::msg("add_derivation returned null"))?;
             Ok(StorePath::new_raw(path))
         }
     }
@@ -358,7 +382,8 @@ impl Store {
     #[doc(alias = "nix_store_realise")]
     pub fn realise(&mut self, path: &StorePath) -> Result<BTreeMap<String, StorePath>> {
         let mut outputs = BTreeMap::new();
-        let userdata = &mut outputs as *mut BTreeMap<String, StorePath> as *mut std::os::raw::c_void;
+        let userdata =
+            &mut outputs as *mut BTreeMap<String, StorePath> as *mut std::os::raw::c_void;
 
         unsafe extern "C" fn callback(
             userdata: *mut std::os::raw::c_void,
@@ -654,6 +679,27 @@ impl Store {
         Ok(())
     }
 
+    /// Check if the client connection is trusted.
+    ///
+    /// Returns `TrustedFlag::Trusted` if trusted, `TrustedFlag::NotTrusted` if not,
+    /// or `TrustedFlag::Unknown` if the concept doesn't apply to this store type.
+    ///
+    /// This is the opposite of the StoreConfig::isTrusted setting.
+    /// That setting is about whether we trust the store. This method
+    /// is about whether the store trusts us (the client).
+    ///
+    /// For LocalStore, this indicates whether the current user has elevated privileges.
+    /// For RemoteStore, this reflects the daemon's trust decision based on the
+    /// `trusted-users` configuration.
+    /// For HTTP binary caches and other store types, returns `TrustedFlag::Unknown`.
+    #[doc(alias = "nix_store_is_trusted_client")]
+    pub fn is_trusted_client(&mut self) -> TrustedFlag {
+        unsafe {
+            let result = raw::store_is_trusted_client(self.context.ptr(), self.inner.ptr());
+            TrustedFlag::from_raw(result)
+        }
+    }
+
     pub fn weak_ref(&self) -> StoreWeak {
         StoreWeak {
             inner: Arc::downgrade(&self.inner),
@@ -672,8 +718,8 @@ impl Clone for Store {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use ctor::ctor;
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -690,7 +736,8 @@ mod tests {
 
         // Set custom build dir for sandbox
         if cfg!(target_os = "linux") {
-            nix_bindings_util::settings::set("sandbox-build-dir", "/custom-build-dir-for-test").ok();
+            nix_bindings_util::settings::set("sandbox-build-dir", "/custom-build-dir-for-test")
+                .ok();
         }
 
         std::env::set_var("_NIX_TEST_NO_SANDBOX", "1");
@@ -736,6 +783,20 @@ mod tests {
         let mut store = Store::open(Some("https://cache.nixos.org/"), HashMap::new()).unwrap();
         let uri = store.get_uri().unwrap();
         assert_eq!(uri, "https://cache.nixos.org");
+    }
+
+    #[test]
+    fn is_trusted_client() {
+        let mut store = Store::open(None, HashMap::new()).unwrap();
+        let trust_status = store.is_trusted_client();
+        // For local stores, this typically returns Trusted or NotTrusted
+        // depending on the user's privileges. Other store types may return Unknown.
+        println!("Trust status: {:?}", trust_status);
+        // Just verify the method doesn't panic and returns a valid result
+        assert!(matches!(
+            trust_status,
+            TrustedFlag::Trusted | TrustedFlag::NotTrusted | TrustedFlag::Unknown
+        ));
     }
 
     #[test]
@@ -902,9 +963,8 @@ mod tests {
 
     #[cfg(nix_at_least = "2.33")]
     fn create_multi_output_derivation_json() -> String {
-        let system = current_system().unwrap_or_else(|_| {
-            format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-        });
+        let system = current_system()
+            .unwrap_or_else(|_| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
 
         format!(
             r#"{{
@@ -960,7 +1020,9 @@ mod tests {
 
         // Verify outputs are complete (BTreeMap guarantees ordering)
         let output_names: Vec<&String> = outputs.keys().collect();
-        let expected_order = vec!["outa", "outb", "outc", "outd", "oute", "outf", "outg", "outh", "outi", "outj"];
+        let expected_order = vec![
+            "outa", "outb", "outc", "outd", "oute", "outf", "outg", "outh", "outi", "outj",
+        ];
         assert_eq!(output_names, expected_order);
 
         drop(store);
@@ -1023,9 +1085,8 @@ mod tests {
     fn realise_builder_fails() {
         let (mut store, temp_dir) = create_temp_store();
 
-        let system = current_system().unwrap_or_else(|_| {
-            format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-        });
+        let system = current_system()
+            .unwrap_or_else(|_| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
 
         // Create a derivation where the builder exits with error
         let drv_json = format!(
@@ -1077,9 +1138,8 @@ mod tests {
     fn realise_builder_no_output() {
         let (mut store, temp_dir) = create_temp_store();
 
-        let system = current_system().unwrap_or_else(|_| {
-            format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-        });
+        let system = current_system()
+            .unwrap_or_else(|_| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
 
         // Create a derivation where the builder succeeds but produces no output
         let drv_json = format!(
@@ -1143,11 +1203,17 @@ mod tests {
         let closure = store.get_fs_closure(&drv_path, false, true, false).unwrap();
 
         // The closure should contain at least the derivation and its output
-        assert!(closure.len() >= 2, "Closure should contain at least drv and output");
+        assert!(
+            closure.len() >= 2,
+            "Closure should contain at least drv and output"
+        );
 
         // Verify the output path is in the closure
         let out_in_closure = closure.iter().any(|p| p.name().unwrap() == out_path_name);
-        assert!(out_in_closure, "Output path should be in closure when include_outputs=true");
+        assert!(
+            out_in_closure,
+            "Output path should be in closure when include_outputs=true"
+        );
 
         drop(store);
         drop(temp_dir);
@@ -1167,11 +1233,16 @@ mod tests {
         let out_path_name = out_path.name().unwrap();
 
         // Get closure with include_outputs=false
-        let closure = store.get_fs_closure(&drv_path, false, false, false).unwrap();
+        let closure = store
+            .get_fs_closure(&drv_path, false, false, false)
+            .unwrap();
 
         // Verify the output path is NOT in the closure
         let out_in_closure = closure.iter().any(|p| p.name().unwrap() == out_path_name);
-        assert!(!out_in_closure, "Output path should not be in closure when include_outputs=false");
+        assert!(
+            !out_in_closure,
+            "Output path should not be in closure when include_outputs=false"
+        );
 
         drop(store);
         drop(temp_dir);
@@ -1195,7 +1266,10 @@ mod tests {
 
         // Verify the output path is NOT in the closure when direction is flipped
         let out_in_closure = closure.iter().any(|p| p.name().unwrap() == out_path_name);
-        assert!(!out_in_closure, "Output path should not be in closure when flip_direction=true");
+        assert!(
+            !out_in_closure,
+            "Output path should not be in closure when flip_direction=true"
+        );
 
         drop(store);
         drop(temp_dir);
@@ -1219,7 +1293,10 @@ mod tests {
 
         // Verify the derivation path is in the closure
         let drv_in_closure = closure.iter().any(|p| p.name().unwrap() == drv_path_name);
-        assert!(drv_in_closure, "Derivation should be in closure when include_derivers=true");
+        assert!(
+            drv_in_closure,
+            "Derivation should be in closure when include_derivers=true"
+        );
 
         drop(store);
         drop(temp_dir);
