@@ -1331,4 +1331,46 @@ mod tests {
         let result = store.clear_substituters();
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn add_trusted_public_keys_works() {
+        let mut store = Store::open_uncached(None, HashMap::new()).unwrap();
+        let keys = vec![
+            "test.cache-1:test1234567890abcdef1234567890abcdef1234567890ab=",
+            "test.cache-2:test2234567890abcdef1234567890abcdef1234567890ab=",
+        ];
+        let result = store.add_trusted_public_keys(&keys);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn add_trusted_public_keys_empty() {
+        let mut store = Store::open_uncached(None, HashMap::new()).unwrap();
+        let keys: Vec<&str> = vec![];
+        let result = store.add_trusted_public_keys(&keys);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn remove_trusted_public_keys_works() {
+        let mut store = Store::open_uncached(None, HashMap::new()).unwrap();
+        let keys = vec![
+            "test.cache-1:test1234567890abcdef1234567890abcdef1234567890ab=",
+        ];
+        // Add a key first
+        let add_result = store.add_trusted_public_keys(&keys);
+        assert!(add_result.is_ok());
+
+        // Then remove it
+        let remove_result = store.remove_trusted_public_keys(&keys);
+        assert!(remove_result.is_ok());
+    }
+
+    #[test]
+    fn remove_trusted_public_keys_empty() {
+        let mut store = Store::open_uncached(None, HashMap::new()).unwrap();
+        let keys: Vec<&str> = vec![];
+        let result = store.remove_trusted_public_keys(&keys);
+        assert!(result.is_ok());
+    }
 }
