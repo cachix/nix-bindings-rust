@@ -588,6 +588,88 @@ impl Store {
         Ok(())
     }
 
+    /// Create a new generation of a profile
+    ///
+    /// Creates a new generation number for the profile and creates a symlink
+    /// profile-N-link pointing to the output path. Updates the main profile
+    /// symlink to point to the new generation.
+    ///
+    /// If the previous generation already points to the same output path, no
+    /// new generation is created (idempotent behavior).
+    ///
+    /// # Arguments
+    /// * `profile` - The profile path (e.g., "/home/user/.devenv/gc/shell")
+    /// * `out_path` - The store path to set as this generation's content
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error if generation could not be created
+    #[doc(alias = "nix_store_create_generation")]
+    pub fn create_generation(&mut self, profile: &Path, out_path: &StorePath) -> Result<()> {
+        let profile_cstring = CString::new(
+            profile
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("Profile path is not valid UTF-8"))?,
+        )?;
+
+        // Manually declare the FFI function since bindings aren't regenerated yet
+        extern "C" {
+            fn nix_store_create_generation(
+                context: *mut raw::c_context,
+                store: *mut raw::Store,
+                profile: *const std::os::raw::c_char,
+                out_path: *mut raw::StorePath,
+            ) -> raw::err;
+        }
+
+        unsafe {
+            check_call!(nix_store_create_generation(
+                &mut self.context,
+                self.inner.ptr(),
+                profile_cstring.as_ptr(),
+                out_path.as_ptr()
+            ))
+        }?;
+        Ok(())
+    }
+
+    /// Delete old generations of a profile
+    ///
+    /// Deletes all generations except the currently active one. This is
+    /// equivalent to `nix-env --delete-generations old`.
+    ///
+    /// # Arguments
+    /// * `profile` - The profile path (e.g., "/home/user/.devenv/gc/shell")
+    /// * `dry_run` - If true, only log what would be deleted without actually deleting
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error if deletion failed
+    #[doc(alias = "nix_store_delete_old_generations")]
+    pub fn delete_old_generations(&mut self, profile: &Path, dry_run: bool) -> Result<()> {
+        let profile_cstring = CString::new(
+            profile
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("Profile path is not valid UTF-8"))?,
+        )?;
+
+        // Manually declare the FFI function since bindings aren't regenerated yet
+        extern "C" {
+            fn nix_store_delete_old_generations(
+                context: *mut raw::c_context,
+                profile: *const std::os::raw::c_char,
+                dry_run: bool,
+            ) -> raw::err;
+        }
+
+        unsafe {
+            check_call!(nix_store_delete_old_generations(
+                &mut self.context,
+                profile_cstring.as_ptr(),
+                dry_run
+            ))
+        }?;
+        Ok(())
+    }
+
     /// Add a substituter to this store at runtime.
     ///
     /// # Arguments
