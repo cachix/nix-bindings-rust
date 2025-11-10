@@ -761,6 +761,74 @@ impl Store {
         Ok(())
     }
 
+    /// Add trusted public keys to this store at runtime.
+    ///
+    /// # Arguments
+    /// * `keys` - Slice of trusted public key strings (e.g., "cache.name-N:key...")
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error if the keys could not be added
+    #[doc(alias = "nix_store_add_trusted_public_keys")]
+    pub fn add_trusted_public_keys(&mut self, keys: &[&str]) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let keys_cstrings: Vec<CString> = keys
+            .iter()
+            .map(|k| CString::new(*k))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut keys_ptrs: Vec<*const c_char> = keys_cstrings.iter().map(|k| k.as_ptr()).collect();
+
+        unsafe {
+            let err_code = raw::store_add_trusted_public_keys(
+                self.context.ptr(),
+                self.inner.ptr(),
+                keys_ptrs.as_mut_ptr(),
+                keys_ptrs.len(),
+            );
+            if err_code != raw::err_NIX_OK {
+                self.context.check_err()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove trusted public keys from this store.
+    ///
+    /// # Arguments
+    /// * `keys` - Slice of trusted public key strings to remove
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error if the keys could not be removed
+    #[doc(alias = "nix_store_remove_trusted_public_keys")]
+    pub fn remove_trusted_public_keys(&mut self, keys: &[&str]) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let keys_cstrings: Vec<CString> = keys
+            .iter()
+            .map(|k| CString::new(*k))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut keys_ptrs: Vec<*const c_char> = keys_cstrings.iter().map(|k| k.as_ptr()).collect();
+
+        unsafe {
+            let err_code = raw::store_remove_trusted_public_keys(
+                self.context.ptr(),
+                self.inner.ptr(),
+                keys_ptrs.as_mut_ptr(),
+                keys_ptrs.len(),
+            );
+            if err_code != raw::err_NIX_OK {
+                self.context.check_err()?;
+            }
+        }
+        Ok(())
+    }
+
     /// Check if the client connection is trusted.
     ///
     /// Returns `TrustedFlag::Trusted` if trusted, `TrustedFlag::NotTrusted` if not,
