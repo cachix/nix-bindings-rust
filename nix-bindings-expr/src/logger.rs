@@ -252,6 +252,7 @@ struct LoggerCallbackData {
 /// }
 /// ```
 pub struct ActivityLogger {
+    #[allow(dead_code)]
     data: Arc<LoggerCallbackData>,
 }
 

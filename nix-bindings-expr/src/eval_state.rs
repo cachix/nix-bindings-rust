@@ -551,6 +551,42 @@ impl EvalState {
         unsafe { check_call!(raw::get_bool(&mut self.context, v.raw_ptr())) }
     }
 
+    /// Extracts the value from a [float][`ValueType::Float`] Nix value.
+    ///
+    /// Forces [evaluation](https://nix.dev/manual/nix/latest/language/evaluation.html) and verifies the value is a float.
+    ///
+    /// Returns the float value if successful, or an [`Err`] if evaluation failed or the value is not a float.
+    #[doc(alias = "nix_get_float")]
+    #[doc(alias = "get_float")]
+    pub fn require_float(&mut self, v: &Value) -> Result<f64> {
+        let t = self.value_type(v)?;
+        if t != ValueType::Float {
+            bail!("expected a float, but got a {:?}", t);
+        }
+        unsafe { Ok(raw::get_float(self.context.ptr(), v.raw_ptr())) }
+    }
+
+    /// Extracts the string representation from a [path][`ValueType::Path`] Nix value.
+    ///
+    /// Forces [evaluation](https://nix.dev/manual/nix/latest/language/evaluation.html) and verifies the value is a path.
+    ///
+    /// Returns the path as a string if successful, or an [`Err`] if evaluation failed or the value is not a path.
+    #[doc(alias = "nix_get_path_string")]
+    #[doc(alias = "get_path_string")]
+    pub fn require_path_string(&mut self, value: &Value) -> Result<String> {
+        let t = self.value_type(value)?;
+        if t != ValueType::Path {
+            bail!("expected a path, but got a {:?}", t);
+        }
+        unsafe {
+            let c_str = check_call!(raw::get_path_string(
+                &mut self.context,
+                value.raw_ptr()
+            ))?;
+            Ok(std::ffi::CStr::from_ptr(c_str).to_string_lossy().into_owned())
+        }
+    }
+
     /// Extracts all elements from a [list][`ValueType::List`] Nix value.
     ///
     /// Forces [evaluation](https://nix.dev/manual/nix/latest/language/evaluation.html) and verifies the value is a list.
