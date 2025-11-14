@@ -118,7 +118,6 @@ lazy_static! {
     static ref STORE_CACHE: Arc<Mutex<StoreCacheMap>> = Arc::new(Mutex::new(HashMap::new()));
 }
 
-#[cfg(nix_at_least = "2.33")]
 unsafe extern "C" fn callback_get_result_store_path_set(
     _context: *mut raw::c_context,
     user_data: *mut std::os::raw::c_void,
@@ -135,7 +134,6 @@ unsafe extern "C" fn callback_get_result_store_path_set(
     ret.push(store_path);
 }
 
-#[cfg(nix_at_least = "2.33")]
 fn callback_get_result_store_path_set_data(vec: &mut Vec<StorePath>) -> *mut std::os::raw::c_void {
     vec as *mut Vec<StorePath> as *mut std::os::raw::c_void
 }
@@ -435,7 +433,6 @@ impl Store {
     ///
     /// # Returns
     /// A vector of store paths in the closure, in no particular order.
-    #[cfg(nix_at_least = "2.33")]
     #[doc(alias = "nix_store_get_fs_closure")]
     pub fn get_fs_closure(
         &mut self,
@@ -1337,7 +1334,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(nix_at_least = "2.33")]
     fn get_fs_closure_with_outputs() {
         let (mut store, temp_dir) = create_temp_store();
         let drv_json = create_test_derivation_json();
@@ -1370,7 +1366,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(nix_at_least = "2.33")]
     fn get_fs_closure_without_outputs() {
         let (mut store, temp_dir) = create_temp_store();
         let drv_json = create_test_derivation_json();
@@ -1399,7 +1394,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(nix_at_least = "2.33")]
     fn get_fs_closure_flip_direction() {
         let (mut store, temp_dir) = create_temp_store();
         let drv_json = create_test_derivation_json();
@@ -1426,7 +1420,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(nix_at_least = "2.33")]
     fn get_fs_closure_include_derivers() {
         let (mut store, temp_dir) = create_temp_store();
         let drv_json = create_test_derivation_json();
