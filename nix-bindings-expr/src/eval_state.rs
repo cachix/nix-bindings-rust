@@ -687,57 +687,30 @@ impl EvalState {
     /// Forces [evaluation](https://nix.dev/manual/nix/latest/language/evaluation.html) and verifies the value is an attribute set.
     ///
     /// Returns the attribute value if found, or an [`Err`] if evaluation failed, the attribute doesn't exist, or the value is not an attribute set.
+    ///
+    /// Supports dotted paths like "foo.bar.baz" to traverse nested attribute sets.
     #[doc(alias = "get_attr")]
     #[doc(alias = "attribute")]
     #[doc(alias = "field")]
     pub fn require_attrs_select(&mut self, v: &Value, attr_name: &str) -> Result<Value> {
-        // Split on dots to support nested attribute paths like "devenv.packages"
-        let parts: Vec<&str> = attr_name.split('.').collect();
-        let mut current = v.clone();
-
-        for part in parts {
-            let t = self.value_type(&current)?;
-            if t != ValueType::AttrSet {
-                bail!("expected an attrset, but got a {:?}", t);
-            }
-
-            let part_cstr = CString::new(part)
-                .with_context(|| "require_attrs_select: attrName contains null byte")?;
-
-            unsafe {
-                let v2 = check_call!(raw::get_attr_byname(
-                    &mut self.context,
-                    current.raw_ptr(),
-                    self.eval_state.as_ptr(),
-                    part_cstr.as_ptr()
-                ));
-                current = match v2 {
-                    Ok(v2) => Value::new(v2),
-                    Err(e) => {
-                        // As of Nix 2.26, the error message is not helpful when it
-                        // is simply missing, so we provide a better one. (Note that
-                        // missing attributes requested by Nix expressions OTOH is a
-                        // different error message which works fine.)
-                        if e.to_string() == "missing attribute" {
-                            bail!("attribute `{}` not found", attr_name);
-                        } else {
-                            return Err(e);
-                        }
-                    }
-                };
+        // Delegate to require_attrs_select_opt and convert None to an error
+        match self.require_attrs_select_opt(v, attr_name)? {
+            Some(value) => Ok(value),
+            None => {
+                bail!("attribute `{}` not found", attr_name);
             }
         }
-
-        Ok(current)
     }
 
     /// Extracts an optional attribute value from an [attribute set][`ValueType::AttrSet`] Nix value.
     ///
     /// Forces [evaluation](https://nix.dev/manual/nix/latest/language/evaluation.html) and verifies the value is an attribute set.
     ///
+    /// Supports dotted paths like "config.info" to traverse nested attribute sets.
+    ///
     /// Returns [`Err`] if evaluation failed or the value is not an attribute set.
     ///
-    /// Returns [`Ok(None)`] if the attribute is not present.
+    /// Returns [`Ok(None)`] if the attribute is not present at any level of the path.
     ///
     /// Returns [`Ok(Some(value))`] if the attribute is present.
     #[doc(alias = "nix_get_attr_byname")]
@@ -750,21 +723,40 @@ impl EvalState {
         v: &Value,
         attr_name: &str,
     ) -> Result<Option<Value>> {
-        let t = self.value_type(v)?;
-        if t != ValueType::AttrSet {
-            bail!("expected an attrset, but got a {:?}", t);
+        // Split on dots to support nested attribute paths like "config.info"
+        let parts: Vec<&str> = attr_name.split('.').collect();
+        let mut current = v.clone();
+
+        for part in parts {
+            let t = self.value_type(&current)?;
+            if t != ValueType::AttrSet {
+                bail!("expected an attrset, but got a {:?}", t);
+            }
+
+            let part_cstr = CString::new(part)
+                .with_context(|| "require_attrs_select_opt: attrName contains null byte")?;
+
+            let v2 = unsafe {
+                check_call_opt_key!(raw::get_attr_byname(
+                    &mut self.context,
+                    current.raw_ptr(),
+                    self.eval_state.as_ptr(),
+                    part_cstr.as_ptr()
+                ))
+            }?;
+
+            match v2 {
+                Some(value) => {
+                    current = unsafe { Value::new(value) };
+                }
+                None => {
+                    // If any part of the path is missing, return None
+                    return Ok(None);
+                }
+            }
         }
-        let attr_name = CString::new(attr_name)
-            .with_context(|| "require_attrs_select_opt: attrName contains null byte")?;
-        let v2 = unsafe {
-            check_call_opt_key!(raw::get_attr_byname(
-                &mut self.context,
-                v.raw_ptr(),
-                self.eval_state.as_ptr(),
-                attr_name.as_ptr()
-            ))
-        }?;
-        Ok(v2.map(|x| unsafe { Value::new(x) }))
+
+        Ok(Some(current))
     }
 
     /// Returns the number of elements in a [list][`ValueType::List`] Nix value.
