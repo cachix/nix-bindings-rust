@@ -293,6 +293,47 @@ impl FlakeInput {
         let ptr = NonNull::new(ptr).context("flake_input_new unexpectedly returned null")?;
         Ok(FlakeInput { ptr })
     }
+
+    /// Set this input to follow another input's version
+    pub fn set_follows(&mut self, follows_path: &str) -> Result<()> {
+        let mut ctx = Context::new();
+        unsafe {
+            context::check_call!(raw::flake_input_set_follows(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                follows_path.as_ptr() as *const c_char,
+                follows_path.len()
+            ))
+        }?;
+        Ok(())
+    }
+
+    /// Set nested input overrides for this input
+    ///
+    /// This allows configuring how this input's own inputs should be resolved.
+    /// For example, to make git-hooks.inputs.nixpkgs follow the root nixpkgs:
+    /// ```ignore
+    /// let mut overrides = FlakeInputs::new()?;
+    /// // Use follows target name as placeholder reference (gets cleared by set_follows)
+    /// let (nixpkgs_ref, _) = FlakeReference::parse(..., "nixpkgs")?;
+    /// let mut nixpkgs_override = FlakeInput::new(&nixpkgs_ref, true)?;
+    /// nixpkgs_override.set_follows("nixpkgs")?;
+    /// overrides.add("nixpkgs", nixpkgs_override)?;
+    /// git_hooks_input.set_overrides(overrides)?;
+    /// ```
+    pub fn set_overrides(&mut self, overrides: FlakeInputs) -> Result<()> {
+        let mut ctx = Context::new();
+        unsafe {
+            context::check_call!(raw::flake_input_set_overrides(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                overrides.ptr.as_ptr()
+            ))
+        }?;
+        // Ownership transferred to input, prevent double-free
+        std::mem::forget(overrides);
+        Ok(())
+    }
 }
 
 /// A collection of flake inputs
@@ -578,6 +619,10 @@ pub enum LockMode {
 ///     .mode(LockMode::WriteAsNeeded)
 ///     .lock(&fetch_settings, &eval_state)?;
 /// ```
+///
+/// # Note
+/// Input follows must be configured on individual [FlakeInput] objects before adding them
+/// to the collection, as the C API does not support modifying inputs after they're added.
 pub struct InputsLocker<'a> {
     flake_settings: &'a FlakeSettings,
     inputs: Option<FlakeInputs>,
