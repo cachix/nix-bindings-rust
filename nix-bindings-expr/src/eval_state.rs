@@ -246,6 +246,7 @@ pub struct EvalStateBuilder {
     eval_state_builder: *mut raw::eval_state_builder,
     lookup_path: Vec<CString>,
     base_directory: Option<CString>,
+    env_overrides: Vec<(CString, CString)>,
     store: Store,
 }
 impl Drop for EvalStateBuilder {
@@ -266,6 +267,7 @@ impl EvalStateBuilder {
             eval_state_builder,
             lookup_path: Vec::new(),
             base_directory: None,
+            env_overrides: Vec::new(),
         })
     }
     /// Sets the [lookup path](https://nix.dev/manual/nix/latest/language/constructs/lookup-path.html) for Nix expression evaluation.
@@ -294,6 +296,27 @@ impl EvalStateBuilder {
         self.base_directory = Some(CString::new(path).with_context(|| {
             format!("EvalStateBuilder::base_directory: path `{path}` contains null byte")
         })?);
+        Ok(self)
+    }
+    /// Sets an environment variable override for pure evaluation mode.
+    ///
+    /// Environment variable overrides allow specific env vars to be accessible
+    /// via `builtins.getEnv` even when pure evaluation mode is enabled.
+    /// This is useful for passing configuration like `NIXPKGS_CONFIG` without
+    /// breaking evaluation purity.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The environment variable name.
+    /// * `value` - The value to return for this env var.
+    pub fn env_override(mut self, name: &str, value: &str) -> Result<Self> {
+        let name_cstr = CString::new(name).with_context(|| {
+            format!("EvalStateBuilder::env_override: name `{name}` contains null byte")
+        })?;
+        let value_cstr = CString::new(value).with_context(|| {
+            format!("EvalStateBuilder::env_override: value `{value}` contains null byte")
+        })?;
+        self.env_overrides.push((name_cstr, value_cstr));
         Ok(self)
     }
     /// Builds the configured [`EvalState`].
@@ -325,6 +348,17 @@ impl EvalStateBuilder {
                     &mut context,
                     self.eval_state_builder,
                     base_dir.as_ptr()
+                ))?;
+            }
+        }
+
+        for (name, value) in &self.env_overrides {
+            unsafe {
+                check_call!(raw::eval_state_builder_set_env_override(
+                    &mut context,
+                    self.eval_state_builder,
+                    name.as_ptr(),
+                    value.as_ptr()
                 ))?;
             }
         }
