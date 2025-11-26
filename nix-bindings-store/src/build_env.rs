@@ -130,7 +130,7 @@ impl BuildEnvironment {
     pub fn get_dev_environment(store: &Store, drv_path: &StorePath) -> Result<Self> {
         let mut ctx = Context::new();
         let ptr = unsafe {
-            raw::nix_get_dev_environment(ctx.ptr(), store.raw_ptr(), drv_path.as_ptr())
+            raw::get_dev_environment(ctx.ptr(), store.raw_ptr(), drv_path.as_ptr())
         };
 
         if ptr.is_null() {
