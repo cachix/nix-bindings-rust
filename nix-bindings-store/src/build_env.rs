@@ -80,6 +80,11 @@ impl BuildEnvironment {
     /// derivation and creates a BuildEnvironment that represents the build
     /// environment for that derivation.
     ///
+    /// Note: This only extracts the raw environment variables from the derivation.
+    /// It does NOT run stdenv setup hooks, so variables like PKG_CONFIG_PATH that
+    /// are computed by setup hooks will not be set. For the fully-expanded
+    /// environment, use [`get_dev_environment`](Self::get_dev_environment) instead.
+    ///
     /// # Errors
     ///
     /// Returns an error if reading the derivation or extracting the environment fails.
@@ -93,6 +98,45 @@ impl BuildEnvironment {
             ctx.check_err()?;
             return Err(anyhow::anyhow!(
                 "Failed to extract BuildEnvironment from derivation"
+            ));
+        }
+
+        Ok(BuildEnvironment {
+            ptr: NonNull::new(ptr).unwrap(),
+        })
+    }
+
+    /// Get the fully-expanded development environment from a derivation.
+    ///
+    /// Unlike [`from_derivation`](Self::from_derivation) which only reads the raw `.drv` file,
+    /// this function actually builds a modified derivation that runs the stdenv
+    /// setup hooks and captures the resulting environment. This is equivalent to
+    /// what `nix print-dev-env` does.
+    ///
+    /// The function:
+    /// 1. Creates a modified derivation that runs a special script instead of the builder
+    /// 2. Builds that derivation to capture the environment after setup hooks run
+    /// 3. Parses the output JSON and returns the BuildEnvironment
+    ///
+    /// This is the recommended way to get the environment for interactive shell use,
+    /// as it includes computed variables like PKG_CONFIG_PATH, PATH additions, etc.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The derivation doesn't use bash as its builder
+    /// - Building the environment derivation fails
+    /// - Parsing the output fails
+    pub fn get_dev_environment(store: &Store, drv_path: &StorePath) -> Result<Self> {
+        let mut ctx = Context::new();
+        let ptr = unsafe {
+            raw::nix_get_dev_environment(ctx.ptr(), store.raw_ptr(), drv_path.as_ptr())
+        };
+
+        if ptr.is_null() {
+            ctx.check_err()?;
+            return Err(anyhow::anyhow!(
+                "Failed to get dev environment from derivation"
             ));
         }
 
