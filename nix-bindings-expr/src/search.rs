@@ -139,8 +139,12 @@ unsafe extern "C" fn search_callback_adapter<F>(
 where
     F: FnMut(SearchResult) -> bool,
 {
+    eprintln!("DEBUG: callback called, result = {:p}, user_data = {:p}", result, user_data);
+
     let ctx = &mut *(user_data as *mut SearchCallbackContext<F>);
     let result = &*result;
+
+    eprintln!("DEBUG: result.attr_path = {:p}", result.attr_path);
 
     let search_result = SearchResult {
         attr_path: if result.attr_path.is_null() {
@@ -171,7 +175,10 @@ where
         },
     };
 
-    (ctx.callback)(search_result)
+    eprintln!("DEBUG: calling Rust callback with attr_path = {}", search_result.attr_path);
+    let cont = (ctx.callback)(search_result);
+    eprintln!("DEBUG: Rust callback returned {}", cont);
+    cont
 }
 
 /// Search for packages matching the given patterns.
@@ -211,6 +218,8 @@ pub fn search<F>(cursor: &AttrCursor, params: Option<&SearchParams>, mut callbac
 where
     F: FnMut(SearchResult) -> bool,
 {
+    eprintln!("DEBUG: search() called, cursor ptr = {:p}", cursor.as_ptr());
+
     let mut ctx = SearchCallbackContext {
         callback: &mut callback,
     };
@@ -219,21 +228,28 @@ where
         .map(|p| p.as_ptr())
         .unwrap_or(std::ptr::null_mut());
 
+    eprintln!("DEBUG: about to call raw::search, params_ptr = {:p}", params_ptr);
+
     let err = unsafe {
         let mut nix_ctx: raw::c_context = std::mem::zeroed();
-        raw::search(
+        let cursor_ptr = cursor.as_ptr();
+        eprintln!("DEBUG: cursor_ptr = {:p}, ctx ptr = {:p}", cursor_ptr, &ctx as *const _);
+        let result = raw::search(
             &mut nix_ctx,
-            cursor.as_ptr(),
+            cursor_ptr,
             params_ptr,
             Some(search_callback_adapter::<F>),
             &mut ctx as *mut SearchCallbackContext<F> as *mut std::ffi::c_void,
-        )
+        );
+        eprintln!("DEBUG: raw::search returned {}", result);
+        result
     };
 
     if err != 0 {
         bail!("Search failed");
     }
 
+    eprintln!("DEBUG: search() returning Ok(())");
     Ok(())
 }
 
