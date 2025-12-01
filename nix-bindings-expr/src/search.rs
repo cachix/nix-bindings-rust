@@ -212,8 +212,6 @@ pub fn search<F>(cursor: &AttrCursor, params: Option<&SearchParams>, mut callbac
 where
     F: FnMut(SearchResult) -> bool,
 {
-    eprintln!("RUST DEBUG: search() called, cursor.as_ptr()={:?}", cursor.as_ptr());
-
     let mut ctx = SearchCallbackContext {
         callback: &mut callback,
     };
@@ -221,8 +219,6 @@ where
     let params_ptr = params
         .map(|p| p.as_ptr())
         .unwrap_or(std::ptr::null_mut());
-
-    eprintln!("RUST DEBUG: calling raw::search with params_ptr={:?}", params_ptr);
 
     let mut nix_ctx = Context::new();
     let err = unsafe {
@@ -234,8 +230,6 @@ where
             &mut ctx as *mut SearchCallbackContext<F> as *mut std::ffi::c_void,
         )
     };
-
-    eprintln!("RUST DEBUG: raw::search returned err={}", err);
 
     if err != 0 {
         bail!("Search failed");
