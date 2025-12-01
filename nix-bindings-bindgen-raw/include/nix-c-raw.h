@@ -6,6 +6,7 @@
 #include <nix_api_expr.h>
 #include <nix_api_value.h>
 #include <nix_api_attr_cursor.h>
+#include <nix_api_search.h>
 #include <nix_api_flake.h>
 #include <nix_api_repl.h>
 #include <nix_api_build_env.h>

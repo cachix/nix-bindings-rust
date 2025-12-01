@@ -3,9 +3,10 @@
 //! AttrCursor provides a way to traverse attribute sets lazily, only forcing
 //! evaluation when values are actually accessed. This is more efficient than
 //! eager evaluation when you don't need all values.
+//!
+//! Cursors are obtained from [`EvalCache::root()`](crate::EvalCache::root) or
+//! [`AttrCursor::get_attr()`].
 
-use crate::eval_state::EvalState;
-use crate::value::Value;
 use anyhow::{bail, Result};
 use nix_bindings_bindgen_raw as raw;
 use std::ffi::CString;
@@ -15,6 +16,9 @@ use std::ptr::NonNull;
 ///
 /// AttrCursor allows navigating through nested attribute sets without forcing
 /// evaluation of values until they are actually needed.
+///
+/// Cursors are created via [`EvalCache::root()`](crate::EvalCache::root) or by
+/// navigating with [`get_attr()`](Self::get_attr).
 pub struct AttrCursor {
     ptr: NonNull<raw::attr_cursor>,
 }
@@ -28,23 +32,16 @@ impl Drop for AttrCursor {
 }
 
 impl AttrCursor {
-    /// Create a cursor from a value (must be an attrset).
-    pub fn new(eval_state: &mut EvalState, value: &Value) -> Result<Self> {
-        let ptr = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            let ptr = raw::attr_cursor_create(
-                &mut ctx,
-                eval_state.raw_ptr(),
-                value.raw_ptr(),
-            );
-            if ptr.is_null() {
-                bail!("Failed to create attr cursor");
-            }
-            ptr
-        };
-        Ok(Self {
-            ptr: NonNull::new(ptr).unwrap(),
-        })
+    /// Create a cursor from a raw pointer.
+    ///
+    /// This is used internally by `EvalCache::root()` and `get_attr()`.
+    pub(crate) fn from_raw(ptr: NonNull<raw::attr_cursor>) -> Self {
+        Self { ptr }
+    }
+
+    /// Get raw pointer for FFI.
+    pub(crate) fn as_ptr(&self) -> *mut raw::attr_cursor {
+        self.ptr.as_ptr()
     }
 
     /// Get a child attribute by name, returning None if not found.
@@ -59,9 +56,7 @@ impl AttrCursor {
         if ptr.is_null() {
             Ok(None)
         } else {
-            Ok(Some(AttrCursor {
-                ptr: NonNull::new(ptr).unwrap(),
-            }))
+            Ok(Some(AttrCursor::from_raw(NonNull::new(ptr).unwrap())))
         }
     }
 
