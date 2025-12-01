@@ -1,7 +1,0 @@
-/home/domen/dev/nix-bindings-rust/.devenv/flake.json
-/home/domen/dev/nix-bindings-rust/.devenv.flake.nix
-/home/domen/dev/nix-bindings-rust/.env
-/home/domen/dev/nix-bindings-rust/devenv.local.nix
-/home/domen/dev/nix-bindings-rust/devenv.lock
-/home/domen/dev/nix-bindings-rust/devenv.nix
-/home/domen/dev/nix-bindings-rust/devenv.yaml
