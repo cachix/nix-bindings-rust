@@ -6,6 +6,7 @@
 use crate::attr_cursor::AttrCursor;
 use anyhow::{bail, Result};
 use nix_bindings_bindgen_raw as raw;
+use nix_bindings_util::context::Context;
 use std::ffi::{CStr, CString};
 use std::ptr::NonNull;
 
@@ -223,10 +224,10 @@ where
 
     eprintln!("RUST DEBUG: calling raw::search with params_ptr={:?}", params_ptr);
 
+    let mut nix_ctx = Context::new();
     let err = unsafe {
-        let mut nix_ctx: raw::c_context = std::mem::zeroed();
         raw::search(
-            &mut nix_ctx,
+            nix_ctx.ptr(),
             cursor.as_ptr(),
             params_ptr,
             Some(search_callback_adapter::<F>),
