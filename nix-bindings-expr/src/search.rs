@@ -232,6 +232,7 @@ where
     };
 
     if err != 0 {
+        nix_ctx.check_err_and_clear()?;
         bail!("Search failed");
     }
 
