@@ -248,6 +248,7 @@ pub struct EvalStateBuilder {
     base_directory: Option<CString>,
     env_overrides: Vec<(CString, CString)>,
     store: Store,
+    load_config: bool,
 }
 impl Drop for EvalStateBuilder {
     fn drop(&mut self) {
@@ -258,6 +259,9 @@ impl Drop for EvalStateBuilder {
 }
 impl EvalStateBuilder {
     /// Creates a new [`EvalStateBuilder`].
+    ///
+    /// By default, settings are loaded from nix.conf files (system, user, and `NIX_CONFIG`).
+    /// Use [`skip_load_config`](Self::skip_load_config) to disable this.
     pub fn new(store: Store) -> Result<EvalStateBuilder> {
         let mut context = Context::new();
         let eval_state_builder =
@@ -268,6 +272,7 @@ impl EvalStateBuilder {
             lookup_path: Vec::new(),
             base_directory: None,
             env_overrides: Vec::new(),
+            load_config: true,
         })
     }
     /// Sets the [lookup path](https://nix.dev/manual/nix/latest/language/constructs/lookup-path.html) for Nix expression evaluation.
@@ -319,12 +324,30 @@ impl EvalStateBuilder {
         self.env_overrides.push((name_cstr, value_cstr));
         Ok(self)
     }
+    /// Skip loading settings from Nix configuration files.
+    ///
+    /// By default, settings are loaded from nix.conf files. Use this method
+    /// to disable that behavior, for example in tests that need controlled settings.
+    pub fn skip_load_config(mut self) -> Self {
+        self.load_config = false;
+        self
+    }
     /// Builds the configured [`EvalState`].
     pub fn build(&self) -> Result<EvalState> {
         // Make sure the library is initialized
         init()?;
 
         let mut context = Context::new();
+
+        // Load settings from nix.conf files if requested
+        if self.load_config {
+            unsafe {
+                check_call!(raw::eval_state_builder_load(
+                    &mut context,
+                    self.eval_state_builder
+                ))?;
+            }
+        }
 
         // Note: these raw C string pointers borrow from self.lookup_path
         let mut lookup_path: Vec<*const c_char> = self

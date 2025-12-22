@@ -73,6 +73,19 @@ lazy_static! {
     };
 }
 
+/// Initialize the Nix store library.
+///
+/// This is called automatically by [`Store::open`], but can be called explicitly
+/// to ensure initialization happens at a predictable time.
+///
+/// This function is thread-safe and idempotent.
+pub fn init() -> Result<()> {
+    match INIT.as_ref() {
+        Ok(_) => Ok(()),
+        Err(e) => Err(anyhow::format_err!("nix_libstore_init error: {}", e)),
+    }
+}
+
 struct StoreRef {
     inner: NonNull<raw::Store>,
 }

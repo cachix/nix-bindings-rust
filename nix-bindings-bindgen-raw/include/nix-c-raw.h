@@ -10,3 +10,4 @@
 #include <nix_api_flake.h>
 #include <nix_api_repl.h>
 #include <nix_api_build_env.h>
+#include <nix_api_fetchers.h>
