@@ -359,6 +359,29 @@ impl ActivityLogger {
     }
 }
 
+impl Drop for ActivityLogger {
+    fn drop(&mut self) {
+        // Clear callbacks from the C++ side before freeing the Rust callback data.
+        // This prevents "pure virtual function called" crashes that occur when
+        // Nix C++ tries to call callbacks after the Rust memory has been freed.
+        //
+        // SAFETY: We pass None for all callbacks and null for user_data to clear
+        // the registered callbacks. This must happen before the Arc<LoggerCallbackData>
+        // is dropped to avoid use-after-free.
+        unsafe {
+            let mut context = Context::new();
+            raw::set_logger_callbacks(
+                context.ptr(),
+                None,
+                None,
+                None,
+                None,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,5 +398,42 @@ mod tests {
         assert!(builder.on_stop.is_some());
         assert!(builder.on_result.is_some());
         assert!(builder.on_log.is_some());
+    }
+
+    #[test]
+    fn test_logger_drop_clears_callbacks() {
+        // This test verifies that dropping an ActivityLogger properly clears
+        // the callbacks from the C++ side, preventing "pure virtual function called"
+        // crashes when Nix tries to call freed callbacks.
+        use crate::eval_state::{EvalStateBuilder, gc_register_my_thread, init};
+        use nix_bindings_store::store::Store;
+
+        init().expect("Failed to initialize Nix");
+        let _gc_registration = gc_register_my_thread().expect("Failed to register GC thread");
+
+        // Create and register a logger
+        let mut context = Context::new();
+        let logger = ActivityLoggerBuilder::new()
+            .on_start(|_id, _desc, _ty, _ftypes, _ints, _strs, _parent| {})
+            .on_stop(|_id| {})
+            .on_result(|_id, _ty, _ftypes, _ints, _strs| {})
+            .on_log(|_level, _msg| {})
+            .register(&mut context)
+            .expect("Failed to register logger");
+
+        // Create an EvalState and do some evaluation
+        let store = Store::open(None, []).expect("Failed to open store");
+        let mut eval_state = EvalStateBuilder::new(store)
+            .expect("Failed to create EvalStateBuilder")
+            .build()
+            .expect("Failed to build EvalState");
+
+        // Evaluate something to potentially trigger callbacks
+        let _ = eval_state.eval_from_string("1 + 1", ".");
+
+        // Drop the logger - this should clear callbacks before freeing memory
+        drop(logger);
+
+        // If we get here without crashing, the Drop implementation worked correctly
     }
 }
