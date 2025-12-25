@@ -93,6 +93,23 @@ impl FlakeReferenceParseFlags {
         }?;
         Ok(())
     }
+
+    /// Enables preserving relative paths in flake references.
+    ///
+    /// When enabled, relative paths like `./` or `../` are preserved as-is
+    /// in the parsed flake reference instead of being resolved to absolute paths.
+    /// This allows the locking mechanism to resolve them later using the source path context.
+    pub fn set_preserve_relative_paths(&mut self, preserve: bool) -> Result<()> {
+        let mut ctx = Context::new();
+        unsafe {
+            context::check_call!(raw::flake_reference_parse_flags_set_preserve_relative_paths(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                preserve
+            ))
+        }?;
+        Ok(())
+    }
 }
 
 pub struct FlakeReference {
