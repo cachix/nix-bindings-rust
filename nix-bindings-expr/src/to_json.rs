@@ -49,6 +49,18 @@ fn value_to_json_impl(
     }
     visited.insert(value_ptr);
 
+    // Call inner function and then clean up visited set
+    // This prevents false cycle detection from stack address reuse in loops
+    let result = value_to_json_inner(eval_state, value, visited);
+    visited.remove(&value_ptr);
+    result
+}
+
+fn value_to_json_inner(
+    eval_state: &mut EvalState,
+    value: &Value,
+    visited: &mut HashSet<usize>,
+) -> Result<serde_json::Value> {
     // Force evaluation to weak head normal form
     eval_state
         .force(value)
