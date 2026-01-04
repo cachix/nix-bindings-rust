@@ -114,6 +114,26 @@ fn value_to_json_impl(
         }
 
         ValueType::AttrSet => {
+            // Check if this is a derivation - if so, coerce to outPath string
+            // This matches the behavior of Nix's builtins.toJSON
+            if let Ok(type_attr) = eval_state.require_attrs_select(value, "type") {
+                // Force type attribute evaluation
+                let _ = eval_state.force(&type_attr);
+                if let Ok(type_str) = eval_state.require_string(&type_attr) {
+                    if type_str == "derivation" {
+                        // Derivation: coerce to outPath string
+                        if let Ok(out_path) = eval_state.require_attrs_select(value, "outPath") {
+                            // Force evaluation of outPath before extracting the string
+                            let _ = eval_state.force(&out_path);
+                            if let Ok(path_str) = eval_state.require_string(&out_path) {
+                                return Ok(JsonValue::String(path_str));
+                            }
+                        }
+                        // If we can't get outPath, fall through to regular serialization
+                    }
+                }
+            }
+
             let attr_names = eval_state
                 .require_attrs_names_unsorted(value)
                 .context("Failed to get attribute names")?;
@@ -122,6 +142,14 @@ fn value_to_json_impl(
             for attr_name in attr_names {
                 match eval_state.require_attrs_select(value, &attr_name) {
                     Ok(attr_value) => {
+                        // Force the attribute value before processing
+                        // This ensures thunks are evaluated before type checking
+                        if let Err(e) = eval_state.force(&attr_value) {
+                            // If force fails (e.g., infinite recursion), skip this attribute
+                            eprintln!("Warning: Failed to force attribute '{}': {}", attr_name, e);
+                            json_obj.insert(attr_name, JsonValue::Null);
+                            continue;
+                        }
                         let json_val = value_to_json_impl(eval_state, &attr_value, visited)?;
                         json_obj.insert(attr_name, json_val);
                     }
