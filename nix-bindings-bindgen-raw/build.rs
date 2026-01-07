@@ -15,6 +15,7 @@ fn main() {
     println!("cargo:rustc-link-lib=nixflake");
     println!("cargo:rustc-link-lib=nixcmd");
     println!("cargo:rustc-link-lib=nixfetchers");
+    println!("cargo:rustc-link-lib=nixmainc");
 
     // https://rust-lang.github.io/rust-bindgen/library-usage.html
     let bindings = bindgen::Builder::default()
@@ -65,6 +66,14 @@ fn c_headers() -> Vec<String> {
     }
 
     for path in pkg_config::probe_library("nix-fetchers-c")
+        .unwrap()
+        .include_paths
+        .iter()
+    {
+        args.push(format!("-I{}", path.to_str().unwrap()));
+    }
+
+    for path in pkg_config::probe_library("nix-main-c")
         .unwrap()
         .include_paths
         .iter()
