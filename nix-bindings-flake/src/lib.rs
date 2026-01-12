@@ -503,6 +503,38 @@ impl LockFile {
             .context("lock_file_inputs_iterator_new unexpectedly returned null")?;
         Ok(LockFileInputsIterator { ptr })
     }
+
+    /// Get the first unlocked input in this lock file
+    ///
+    /// Returns the flake reference of the first input that is not fully locked,
+    /// or `None` if all inputs are locked.
+    ///
+    /// An input is considered locked based on its type:
+    /// - git/mercurial: has a revision
+    /// - github/gitlab/sourcehut: has a revision (and narHash if `allow-dirty-locks` is disabled)
+    /// - path/tarball/file: has a narHash
+    ///
+    /// The `allow-dirty-locks` setting in `fetch_settings` affects this check:
+    /// when enabled, inputs with a narHash are considered locked even without a revision.
+    pub fn get_unlocked_input(&self, fetch_settings: &FetchersSettings) -> Result<Option<String>> {
+        let mut ctx = Context::new();
+        let mut r = result_string_init!();
+        unsafe {
+            context::check_call!(raw::lock_file_get_unlocked_input(
+                &mut ctx,
+                fetch_settings.raw_ptr(),
+                self.ptr.as_ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        let s = r?;
+        if s.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(s))
+        }
+    }
 }
 
 /// Iterator over inputs in a lock file
@@ -568,6 +600,30 @@ impl LockFileInputsIterator {
             ))
         }?;
         r
+    }
+
+    /// Check if the current input is locked
+    ///
+    /// An input is considered "locked" based on its type:
+    /// - git/mercurial: has a revision
+    /// - github/gitlab/sourcehut: has a revision and narHash
+    /// - path/tarball/file: has a narHash
+    ///
+    /// Note: This does not consider the `allow-dirty-locks` setting.
+    /// For that behavior, use [`LockFile::get_unlocked_input`] instead.
+    ///
+    /// For "follows" inputs, this returns true since they inherit locking from their target.
+    pub fn is_locked(&self) -> Result<bool> {
+        let mut ctx = Context::new();
+        let mut result = false;
+        unsafe {
+            context::check_call!(raw::lock_file_inputs_iterator_is_locked(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                &mut result
+            ))
+        }?;
+        Ok(result)
     }
 }
 
