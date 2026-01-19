@@ -121,16 +121,26 @@ impl BuildEnvironment {
     /// This is the recommended way to get the environment for interactive shell use,
     /// as it includes computed variables like PKG_CONFIG_PATH, PATH additions, etc.
     ///
+    /// Returns a tuple of the `BuildEnvironment` and the `StorePath` of the
+    /// environment output (the store path containing the JSON file).
+    ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The derivation doesn't use bash as its builder
     /// - Building the environment derivation fails
     /// - Parsing the output fails
-    pub fn get_dev_environment(store: &Store, drv_path: &StorePath) -> Result<Self> {
+    pub fn get_dev_environment(store: &Store, drv_path: &StorePath) -> Result<(Self, StorePath)> {
         let mut ctx = Context::new();
+        let mut env_path_ptr: *mut raw::StorePath = std::ptr::null_mut();
+
         let ptr = unsafe {
-            raw::get_dev_environment(ctx.ptr(), store.raw_ptr(), drv_path.as_ptr())
+            raw::get_dev_environment(
+                ctx.ptr(),
+                store.raw_ptr(),
+                drv_path.as_ptr(),
+                &mut env_path_ptr,
+            )
         };
 
         if ptr.is_null() {
@@ -140,9 +150,19 @@ impl BuildEnvironment {
             ));
         }
 
-        Ok(BuildEnvironment {
-            ptr: NonNull::new(ptr).unwrap(),
-        })
+        let env_path = unsafe {
+            StorePath::new_raw(
+                NonNull::new(env_path_ptr)
+                    .ok_or_else(|| anyhow::anyhow!("Failed to get env path from dev environment"))?,
+            )
+        };
+
+        Ok((
+            BuildEnvironment {
+                ptr: NonNull::new(ptr).unwrap(),
+            },
+            env_path,
+        ))
     }
 
     /// Serialize this BuildEnvironment to JSON.
