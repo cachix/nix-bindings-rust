@@ -175,6 +175,64 @@ pub fn run_repl_simple(
     Ok(ReplExitStatus::from_raw(exit_status))
 }
 
+/// Check if a debugger session is pending.
+///
+/// After evaluation with the debugger enabled, this function returns true if
+/// an error occurred and the debug context was captured. The caller should
+/// then call [`debugger_run_pending`] to run the interactive REPL.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use nix_cmd::{debugger_is_pending, debugger_run_pending};
+/// use nix_bindings_expr::eval_state::EvalState;
+///
+/// # fn example(eval_state: &mut EvalState) -> anyhow::Result<()> {
+/// // After evaluation with debugger enabled...
+/// if debugger_is_pending() {
+///     // Perform any cleanup (e.g., restore terminal from TUI)
+///     let status = debugger_run_pending(eval_state)?;
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub fn debugger_is_pending() -> bool {
+    unsafe { raw::debugger_is_pending() }
+}
+
+/// Run the pending debugger REPL.
+///
+/// If a debugger session is pending ([`debugger_is_pending`] returns true),
+/// this function runs the interactive REPL with the captured debug context.
+/// After this call, the pending state is cleared.
+///
+/// This should be called after any TUI or terminal state has been restored,
+/// as the REPL needs exclusive access to the terminal.
+///
+/// # Arguments
+///
+/// * `eval_state` - The evaluation state (must be the same one used during evaluation)
+///
+/// # Errors
+///
+/// Returns an error if the REPL fails to start or encounters an error during execution.
+pub fn debugger_run_pending(
+    eval_state: &mut nix_bindings_expr::eval_state::EvalState,
+) -> anyhow::Result<ReplExitStatus> {
+    let mut ctx = Context::new();
+    let mut exit_status: raw::repl_exit_status = 0;
+
+    unsafe {
+        nix_bindings_util::check_call!(raw::debugger_run_pending(
+            &mut ctx,
+            eval_state.raw_ptr(),
+            &mut exit_status as *mut _
+        ))?;
+    }
+
+    Ok(ReplExitStatus::from_raw(exit_status))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
