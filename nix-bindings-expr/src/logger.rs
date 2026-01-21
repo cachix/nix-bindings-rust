@@ -358,24 +358,17 @@ impl ActivityLogger {
         ActivityLoggerBuilder::new()
     }
 
-    /// Clear the logger callbacks, restoring default Nix logging behavior.
+    /// Reset the logger to the default SimpleLogger, restoring normal stderr output.
     ///
     /// This is useful when you want to stop capturing Nix activity events
     /// (e.g., before running a REPL that needs normal stderr/stdout output).
     ///
     /// After calling this, the ActivityLogger instance is still valid but
     /// will no longer receive callbacks.
-    pub fn clear(&self) {
+    pub fn reset(&self) {
         unsafe {
             let mut context = Context::new();
-            raw::set_logger_callbacks(
-                context.ptr(),
-                None,
-                None,
-                None,
-                None,
-                std::ptr::null_mut(),
-            );
+            raw::reset_logger(context.ptr());
         }
     }
 }
