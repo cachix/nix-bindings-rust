@@ -167,6 +167,28 @@ pub fn init() -> Result<()> {
     }
 }
 
+/// Initialize the signal handler thread for proper REPL operation.
+///
+/// This function starts a dedicated signal handler thread that handles
+/// SIGINT, SIGTERM, SIGHUP, SIGPIPE, and SIGWINCH. This is necessary for
+/// proper signal handling when using the REPL.
+///
+/// The signal handler thread blocks these signals from other threads and
+/// handles them via sigwait(), which prevents conflicts with the Boehm GC's
+/// signal-based stop-the-world mechanism.
+///
+/// This function should be called once before using the REPL.
+///
+/// # Errors
+///
+/// Returns an error if starting the signal handler thread fails.
+pub fn init_signal_handler() -> Result<()> {
+    unsafe {
+        check_call!(raw::init_signal_handler(&mut Context::new()))?;
+    }
+    Ok(())
+}
+
 /// A string value with its associated [store paths](https://nix.dev/manual/nix/stable/store/store-path.html).
 ///
 /// Represents a Nix string with references to store paths.
