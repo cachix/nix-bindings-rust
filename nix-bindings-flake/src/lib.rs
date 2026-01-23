@@ -231,6 +231,23 @@ impl FlakeLockFlags {
         }?;
         Ok(())
     }
+
+    /// Enable or disable registry lookups for flake input resolution.
+    ///
+    /// When enabled, indirect flake references like `nixpkgs` or `flake:nixpkgs`
+    /// can be resolved through the flake registry. When disabled (the default),
+    /// such references will cause an error.
+    pub fn set_use_registries(&mut self, use_registries: bool) -> Result<()> {
+        let mut ctx = Context::new();
+        unsafe {
+            context::check_call!(raw::flake_lock_flags_set_use_registries(
+                &mut ctx,
+                self.ptr,
+                use_registries
+            ))
+        }?;
+        Ok(())
+    }
 }
 
 pub struct LockedFlake {
@@ -704,6 +721,7 @@ pub struct InputsLocker<'a> {
     updates: Vec<String>,
     overrides: Vec<(String, &'a FlakeReference)>,
     mode: LockMode,
+    use_registries: bool,
 }
 
 impl<'a> InputsLocker<'a> {
@@ -717,6 +735,7 @@ impl<'a> InputsLocker<'a> {
             updates: Vec::new(),
             overrides: Vec::new(),
             mode: LockMode::WriteAsNeeded,
+            use_registries: false,
         }
     }
 
@@ -775,6 +794,16 @@ impl<'a> InputsLocker<'a> {
         self
     }
 
+    /// Enable or disable registry lookups for flake input resolution.
+    ///
+    /// When enabled, indirect flake references like `nixpkgs` or `flake:nixpkgs`
+    /// can be resolved through the flake registry. When disabled (the default),
+    /// such references will cause an error.
+    pub fn use_registries(mut self, use_registries: bool) -> Self {
+        self.use_registries = use_registries;
+        self
+    }
+
     /// Execute the locking operation with all accumulated settings
     pub fn lock(
         self,
@@ -789,6 +818,9 @@ impl<'a> InputsLocker<'a> {
             LockMode::Virtual => flags.set_mode_virtual()?,
             LockMode::Check => flags.set_mode_check()?,
         }
+
+        // Set registry usage
+        flags.set_use_registries(self.use_registries)?;
 
         // Add all input updates
         for input_path in self.updates {
