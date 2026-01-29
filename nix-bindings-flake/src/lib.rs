@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result};
 use nix_bindings_bindgen_raw as raw;
 use nix_bindings_expr::eval_state::EvalState;
 use nix_bindings_fetchers::FetchersSettings;
+use nix_bindings_store::store::Store;
 use nix_bindings_util::{
     context::{self, Context},
     result_string_init,
@@ -641,6 +642,35 @@ impl LockFileInputsIterator {
             ))
         }?;
         Ok(result)
+    }
+
+    /// Get the fingerprint of the current input
+    ///
+    /// Returns a content identifier for the locked input that can be used to detect changes.
+    /// The fingerprint format varies by input type:
+    /// - git/github/mercurial: the revision hash (e.g., "abc123...")
+    /// - tarball/path: the narHash in SRI format (e.g., "sha256-abc...")
+    ///
+    /// For "follows" inputs (InputAttrPath), returns `None` since they inherit
+    /// their fingerprint from the target input.
+    pub fn fingerprint(&self, store: &Store) -> Result<Option<String>> {
+        let mut ctx = Context::new();
+        let mut r = result_string_init!();
+        unsafe {
+            context::check_call!(raw::lock_file_inputs_iterator_get_fingerprint(
+                &mut ctx,
+                self.ptr.as_ptr(),
+                store.raw_ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        let s = r?;
+        if s.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(s))
+        }
     }
 }
 
