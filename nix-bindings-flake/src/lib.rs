@@ -249,6 +249,23 @@ impl FlakeLockFlags {
         }?;
         Ok(())
     }
+
+    /// Set recreateLockFile flag to re-resolve all inputs from scratch.
+    ///
+    /// When enabled, the lock file is recreated from scratch, ignoring all
+    /// existing locks. This is the equivalent of `nix flake update` with no
+    /// specific input arguments.
+    pub fn set_recreate_lock_file(&mut self, recreate: bool) -> Result<()> {
+        let mut ctx = Context::new();
+        unsafe {
+            context::check_call!(raw::flake_lock_flags_set_recreate_lock_file(
+                &mut ctx,
+                self.ptr,
+                recreate
+            ))
+        }?;
+        Ok(())
+    }
 }
 
 pub struct LockedFlake {
@@ -749,6 +766,7 @@ pub struct InputsLocker<'a> {
     source_path: Option<String>,
     old_lock: Option<&'a LockFile>,
     updates: Vec<String>,
+    update_all: bool,
     overrides: Vec<(String, &'a FlakeReference)>,
     mode: LockMode,
     use_registries: bool,
@@ -763,6 +781,7 @@ impl<'a> InputsLocker<'a> {
             source_path: None,
             old_lock: None,
             updates: Vec::new(),
+            update_all: false,
             overrides: Vec::new(),
             mode: LockMode::WriteAsNeeded,
             use_registries: false,
@@ -800,6 +819,14 @@ impl<'a> InputsLocker<'a> {
         S: Into<String>,
     {
         self.updates.extend(inputs.into_iter().map(|s| s.into()));
+        self
+    }
+
+    /// Recreate the lock file from scratch, re-resolving all inputs.
+    ///
+    /// This is the equivalent of `nix flake update` with no specific input arguments.
+    pub fn update_all(mut self) -> Self {
+        self.update_all = true;
         self
     }
 
@@ -851,6 +878,11 @@ impl<'a> InputsLocker<'a> {
 
         // Set registry usage
         flags.set_use_registries(self.use_registries)?;
+
+        // Set recreate lock file if updating all inputs
+        if self.update_all {
+            flags.set_recreate_lock_file(true)?;
+        }
 
         // Add all input updates
         for input_path in self.updates {
