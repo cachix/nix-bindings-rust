@@ -149,7 +149,6 @@ use std::sync::{Arc, Weak};
 lazy_static! {
     static ref INIT: Result<()> = {
         unsafe {
-            raw::GC_allow_register_threads();
             check_call!(raw::libexpr_init(&mut Context::new()))?;
             Ok(())
         }
