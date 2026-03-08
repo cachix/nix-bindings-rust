@@ -150,6 +150,7 @@ lazy_static! {
     static ref INIT: Result<()> = {
         unsafe {
             check_call!(raw::libexpr_init(&mut Context::new()))?;
+            raw::GC_allow_register_threads();
             Ok(())
         }
     };
