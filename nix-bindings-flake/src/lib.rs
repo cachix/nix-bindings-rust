@@ -648,12 +648,13 @@ impl LockFileInputsIterator {
     /// For that behavior, use [`LockFile::get_unlocked_input`] instead.
     ///
     /// For "follows" inputs, this returns true since they inherit locking from their target.
-    pub fn is_locked(&self) -> Result<bool> {
+    pub fn is_locked(&self, fetch_settings: &FetchersSettings) -> Result<bool> {
         let mut ctx = Context::new();
         let mut result = false;
         unsafe {
             context::check_call!(raw::lock_file_inputs_iterator_is_locked(
                 &mut ctx,
+                fetch_settings.raw_ptr(),
                 self.ptr.as_ptr(),
                 &mut result
             ))
@@ -670,13 +671,14 @@ impl LockFileInputsIterator {
     ///
     /// For "follows" inputs (InputAttrPath), returns `None` since they inherit
     /// their fingerprint from the target input.
-    pub fn fingerprint(&self, store: &Store) -> Result<Option<String>> {
+    pub fn fingerprint(&self, fetch_settings: &FetchersSettings, store: &Store) -> Result<Option<String>> {
         let mut ctx = Context::new();
         let mut r = result_string_init!();
         unsafe {
             context::check_call!(raw::lock_file_inputs_iterator_get_fingerprint(
                 &mut ctx,
                 self.ptr.as_ptr(),
+                fetch_settings.raw_ptr(),
                 store.raw_ptr(),
                 Some(callback_get_result_string),
                 callback_get_result_string_data(&mut r)
