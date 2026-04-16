@@ -57,8 +57,7 @@ impl SearchParams {
     /// - No exclude patterns
     pub fn new() -> Result<Self> {
         let ptr = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            let ptr = raw::search_params_new(&mut ctx);
+            let ptr = raw::search_params_new(std::ptr::null_mut());
             if ptr.is_null() {
                 bail!("Failed to create search params");
             }
@@ -83,8 +82,7 @@ impl SearchParams {
         let pattern_cstr = CString::new(pattern)?;
 
         let err = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            raw::search_params_add_regex(&mut ctx, self.ptr.as_ptr(), pattern_cstr.as_ptr())
+            raw::search_params_add_regex(std::ptr::null_mut(), self.ptr.as_ptr(), pattern_cstr.as_ptr())
         };
 
         if err != 0 {
@@ -107,8 +105,7 @@ impl SearchParams {
         let pattern_cstr = CString::new(pattern)?;
 
         let err = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            raw::search_params_add_exclude(&mut ctx, self.ptr.as_ptr(), pattern_cstr.as_ptr())
+            raw::search_params_add_exclude(std::ptr::null_mut(), self.ptr.as_ptr(), pattern_cstr.as_ptr())
         };
 
         if err != 0 {

@@ -49,8 +49,7 @@ impl AttrCursor {
         let name_cstr = CString::new(name)?;
 
         let ptr = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            raw::attr_cursor_get_attr(&mut ctx, self.ptr.as_ptr(), name_cstr.as_ptr())
+            raw::attr_cursor_get_attr(std::ptr::null_mut(), self.ptr.as_ptr(), name_cstr.as_ptr())
         };
 
         if ptr.is_null() {
@@ -63,8 +62,7 @@ impl AttrCursor {
     /// Get the number of attributes in the current attrset.
     pub fn attrs_count(&self) -> Result<usize> {
         let count = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            raw::attr_cursor_get_attrs_count(&mut ctx, self.ptr.as_ptr())
+            raw::attr_cursor_get_attrs_count(std::ptr::null_mut(), self.ptr.as_ptr())
         };
         if count < 0 {
             bail!("Failed to get attrs count");
@@ -102,9 +100,8 @@ impl AttrCursor {
         }
 
         let err = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
             raw::attr_cursor_get_attr_name(
-                &mut ctx,
+                std::ptr::null_mut(),
                 self.ptr.as_ptr(),
                 index as std::ffi::c_uint,
                 Some(callback),
@@ -123,8 +120,7 @@ impl AttrCursor {
     pub fn is_derivation(&self) -> Result<bool> {
         let mut is_drv = false;
         let err = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            raw::attr_cursor_is_derivation(&mut ctx, self.ptr.as_ptr(), &mut is_drv)
+            raw::attr_cursor_is_derivation(std::ptr::null_mut(), self.ptr.as_ptr(), &mut is_drv)
         };
         if err != 0 {
             bail!("Failed to check is_derivation");
@@ -149,9 +145,8 @@ impl AttrCursor {
         }
 
         let err = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
             raw::attr_cursor_get_string(
-                &mut ctx,
+                std::ptr::null_mut(),
                 self.ptr.as_ptr(),
                 Some(callback),
                 &mut result as *mut String as *mut std::ffi::c_void,
@@ -169,8 +164,7 @@ impl AttrCursor {
     pub fn get_bool(&self) -> Result<bool> {
         let mut value = false;
         let err = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            raw::attr_cursor_get_bool(&mut ctx, self.ptr.as_ptr(), &mut value)
+            raw::attr_cursor_get_bool(std::ptr::null_mut(), self.ptr.as_ptr(), &mut value)
         };
         if err != 0 {
             bail!("Failed to get bool value");

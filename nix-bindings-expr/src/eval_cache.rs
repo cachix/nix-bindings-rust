@@ -71,9 +71,14 @@ impl EvalCache {
             .unwrap_or(std::ptr::null());
 
         let ptr = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
+            // Pass null context: the Nix C API treats NULL as "skip error
+            // reporting".  Using std::mem::zeroed() here is unsound because
+            // bindgen maps nix_c_context to a zero-sized opaque type while the
+            // real C++ struct is large (contains std::string, etc.).  Passing a
+            // pointer to the zero-sized stack value causes the C code to write
+            // through it, corrupting the Rust stack.
             let ptr = raw::eval_cache_create(
-                &mut ctx,
+                std::ptr::null_mut(),
                 eval_state.raw_ptr(),
                 value.raw_ptr(),
                 cache_key_ptr,
@@ -95,8 +100,7 @@ impl EvalCache {
     /// used to lazily traverse the attribute set.
     pub fn root(&self) -> Result<AttrCursor> {
         let ptr = unsafe {
-            let mut ctx: raw::c_context = std::mem::zeroed();
-            let ptr = raw::eval_cache_get_root(&mut ctx, self.ptr.as_ptr());
+            let ptr = raw::eval_cache_get_root(std::ptr::null_mut(), self.ptr.as_ptr());
             if ptr.is_null() {
                 bail!("Failed to get root cursor from eval cache");
             }
