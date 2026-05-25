@@ -269,6 +269,7 @@ pub struct EvalStateBuilder {
     lookup_path: Vec<CString>,
     base_directory: Option<CString>,
     env_overrides: Vec<(CString, CString)>,
+    fetch_settings: Vec<(CString, CString)>,
     store: Store,
     load_config: bool,
 }
@@ -294,6 +295,7 @@ impl EvalStateBuilder {
             lookup_path: Vec::new(),
             base_directory: None,
             env_overrides: Vec::new(),
+            fetch_settings: Vec::new(),
             load_config: true,
         })
     }
@@ -346,6 +348,22 @@ impl EvalStateBuilder {
         self.env_overrides.push((name_cstr, value_cstr));
         Ok(self)
     }
+    /// Override a fetcher setting on the eval state's `fetchers::Settings`.
+    ///
+    /// These settings drive fetching and flake locking for the built
+    /// [`EvalState`]. Overrides are applied after nix.conf is loaded, so they
+    /// take precedence. For example, set `tarball-ttl` to `0` to force a
+    /// refresh of branch and tag resolution.
+    pub fn fetch_setting(mut self, key: &str, value: &str) -> Result<Self> {
+        let key_cstr = CString::new(key).with_context(|| {
+            format!("EvalStateBuilder::fetch_setting: key `{key}` contains null byte")
+        })?;
+        let value_cstr = CString::new(value).with_context(|| {
+            format!("EvalStateBuilder::fetch_setting: value `{value}` contains null byte")
+        })?;
+        self.fetch_settings.push((key_cstr, value_cstr));
+        Ok(self)
+    }
     /// Skip loading settings from Nix configuration files.
     ///
     /// By default, settings are loaded from nix.conf files. Use this method
@@ -368,6 +386,30 @@ impl EvalStateBuilder {
                     &mut context,
                     self.eval_state_builder
                 ))?;
+            }
+        }
+
+        // Apply fetcher setting overrides after nix.conf so they take precedence.
+        if !self.fetch_settings.is_empty() {
+            unsafe {
+                let abstract_settings = check_call!(raw::eval_state_builder_fetch_settings_as_abstract_settings(
+                    &mut context,
+                    self.eval_state_builder
+                ))?;
+                let mut result: Result<()> = Ok(());
+                for (key, value) in &self.fetch_settings {
+                    if let Err(e) = check_call!(raw::abstract_settings_set(
+                        &mut context,
+                        abstract_settings,
+                        key.as_ptr(),
+                        value.as_ptr()
+                    )) {
+                        result = Err(e);
+                        break;
+                    }
+                }
+                raw::abstract_settings_free(abstract_settings);
+                result?;
             }
         }
 
