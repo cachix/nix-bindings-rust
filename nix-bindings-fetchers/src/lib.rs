@@ -43,6 +43,29 @@ impl FetchersSettings {
     pub fn raw_ptr(&self) -> *mut raw::fetchers_settings {
         self.ptr.as_ptr()
     }
+
+    /// Override an individual setting on these fetcher settings at runtime.
+    ///
+    /// Unlike [`nix_bindings_util::settings::set`], which only affects the
+    /// global configuration, this targets this specific settings object, i.e.
+    /// the one used for fetching and locking. For example, set `tarball-ttl` to
+    /// `0` to force a refresh of branch and tag resolution.
+    ///
+    /// Use `extra-<setting name>` as the key to append to the current value.
+    pub fn set(&self, key: &str, value: &str) -> Result<()> {
+        let key = std::ffi::CString::new(key)?;
+        let value = std::ffi::CString::new(value)?;
+        let mut ctx = Context::new();
+        unsafe {
+            let abstract_settings =
+                check_call!(raw::fetchers_settings_as_abstract_settings(&mut ctx, self.ptr.as_ptr()))?;
+            let result =
+                check_call!(raw::abstract_settings_set(&mut ctx, abstract_settings, key.as_ptr(), value.as_ptr()));
+            raw::abstract_settings_free(abstract_settings);
+            result?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
