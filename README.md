@@ -1,7 +1,9 @@
 
 # `nix_bindings_*` crates
 
-Use the Nix [C API] from Rust.
+Use Nix from Rust. Most crates wrap the stable [C API];
+`nix-bindings-logger` provides a small CXX extension for emitting activities
+through the hosting process's logger, which the C API cannot currently do.
 
 ## Build with `nix-cargo-integration`
 

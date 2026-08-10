@@ -1,0 +1,13 @@
+[package]
+name = "nix-bindings-logger"
+description = "Rust bindings for emitting activities through Nix's in-process logger"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+
+[dependencies]
+cxx = "1.0"
+
+[build-dependencies]
+cxx-build = "1.0"
+pkg-config = "0.3"
