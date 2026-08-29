@@ -151,6 +151,20 @@ fn callback_get_result_store_path_set_data(vec: &mut Vec<StorePath>) -> *mut std
     vec as *mut Vec<StorePath> as *mut std::os::raw::c_void
 }
 
+unsafe extern "C" fn callback_collect_store_path(
+    path: *const raw::StorePath,
+    user_data: *mut std::ffi::c_void,
+) {
+    let Some(path) = NonNull::new(path as *mut raw::StorePath) else {
+        return;
+    };
+    if user_data.is_null() {
+        return;
+    }
+    let result = unsafe { &mut *(user_data as *mut Vec<StorePath>) };
+    result.push(unsafe { StorePath::new_raw_clone(path) });
+}
+
 pub struct Store {
     inner: Arc<StoreRef>,
     /* An error context to reuse. This way we don't have to allocate them for each store operation. */
@@ -264,6 +278,22 @@ impl Store {
         let mut r = result_string_init!();
         unsafe {
             check_call!(raw::store_get_uri(
+                &mut self.context,
+                self.inner.ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        r
+    }
+
+    /// Return the version reported by the store. For daemon stores this is
+    /// the daemon's Nix version, not the linked client library's version.
+    #[doc(alias = "nix_store_get_version")]
+    pub fn get_version(&mut self) -> Result<String> {
+        let mut r = result_string_init!();
+        unsafe {
+            check_call!(raw::store_get_version(
                 &mut self.context,
                 self.inner.ptr(),
                 Some(callback_get_result_string),
@@ -470,20 +500,54 @@ impl Store {
         Ok(r)
     }
 
+    /// Compute the filesystem closure of several store paths in one traversal.
+    #[doc(alias = "nix_store_compute_fs_closure")]
+    pub fn compute_fs_closure(
+        &mut self,
+        store_paths: &[&StorePath],
+        flip_direction: bool,
+        include_outputs: bool,
+        include_derivers: bool,
+    ) -> Result<Vec<StorePath>> {
+        let mut result = Vec::new();
+        let paths: Vec<*mut raw::StorePath> = store_paths
+            .iter()
+            .map(|path| unsafe { path.as_ptr() })
+            .collect();
+
+        unsafe {
+            check_call!(raw::store_compute_fs_closure(
+                &mut self.context,
+                self.inner.ptr(),
+                paths.as_ptr() as *mut *mut raw::StorePath,
+                paths.len(),
+                flip_direction,
+                include_outputs,
+                include_derivers,
+                Some(callback_collect_store_path),
+                callback_get_result_store_path_set_data(&mut result)
+            ))
+        }?;
+        Ok(result)
+    }
+
     /// Perform garbage collection on the store.
     ///
     /// This function provides flexible garbage collection with different modes:
     /// - ReturnLive: Returns paths reachable from GC roots (live paths)
     /// - ReturnDead: Returns paths not reachable from GC roots (dead paths)
-    /// - DeleteDead: Deletes all dead paths
-    /// - DeleteSpecific: Deletes specific paths from the `paths_to_delete` argument,
-    ///   but only if they are not reachable from GC roots (respects liveness)
+    /// - DeleteDead: Deletes dead paths, optionally scoped by `paths_to_delete`
+    /// - DeleteSpecific: Strictly deletes paths from `paths_to_delete`, failing if
+    ///   any candidate is reachable from GC roots
     ///
     /// # Arguments
     /// * `action` - The garbage collection action to perform
-    /// * `paths_to_delete` - For DeleteSpecific: paths to consider for deletion. None for other actions.
+    /// * `paths_to_delete` - Optional scope for any action. `Some` selects a
+    ///   specific scope; `None` selects the whole store.
     /// * `ignore_liveness` - If true, ignore reachability from roots (dangerous!).
     ///   Only has effect with DeleteSpecific.
+    /// * `delete_referrers` - Allow deletion of dead paths that refer to candidates.
+    ///   Requires a Nix 2.35 or newer daemon.
     /// * `max_freed` - Stop after freeing this many bytes. 0 means no limit.
     ///
     /// # Returns
@@ -497,23 +561,15 @@ impl Store {
         action: GcAction,
         paths_to_delete: Option<&[&StorePath]>,
         ignore_liveness: bool,
+        delete_referrers: bool,
         max_freed: u64,
     ) -> Result<(Vec<StorePath>, u64)> {
         let mut result_paths = Vec::new();
         let result_ptr = &mut result_paths as *mut Vec<StorePath>;
         let mut bytes_freed: u64 = 0;
 
-        extern "C" fn callback(path: *const raw::StorePath, user_data: *mut std::ffi::c_void) {
-            unsafe {
-                // Clone the path to add it to the result vector
-                let store_path =
-                    StorePath::new_raw_clone(NonNull::new(path as *mut raw::StorePath).unwrap());
-                let result = &mut *(user_data as *mut Vec<StorePath>);
-                result.push(store_path);
-            }
-        }
-
         // Convert paths_to_delete if provided
+        let has_specific_paths = paths_to_delete.is_some();
         let paths_vec: Vec<*mut raw::StorePath> = paths_to_delete
             .unwrap_or_default()
             .iter()
@@ -521,19 +577,20 @@ impl Store {
             .collect();
 
         unsafe {
-            check_call!(raw::store_collect_garbage(
+            check_call!(raw::store_collect_garbage_with_options(
                 &mut self.context,
                 self.inner.ptr(),
                 action.to_raw(),
-                if paths_vec.is_empty() {
-                    std::ptr::null_mut()
-                } else {
+                if has_specific_paths {
                     paths_vec.as_ptr() as *mut *mut raw::StorePath
+                } else {
+                    std::ptr::null_mut()
                 },
                 paths_vec.len(),
                 ignore_liveness,
+                delete_referrers,
                 max_freed,
-                Some(callback),
+                Some(callback_collect_store_path),
                 result_ptr as *mut std::ffi::c_void,
                 &mut bytes_freed
             ))
@@ -1510,9 +1567,7 @@ mod tests {
     #[test]
     fn remove_trusted_public_keys_works() {
         let mut store = Store::open_uncached(None, HashMap::new()).unwrap();
-        let keys = vec![
-            "test.cache-1:test1234567890abcdef1234567890abcdef1234567890ab=",
-        ];
+        let keys = vec!["test.cache-1:test1234567890abcdef1234567890abcdef1234567890ab="];
         // Add a key first
         let add_result = store.add_trusted_public_keys(&keys);
         assert!(add_result.is_ok());
