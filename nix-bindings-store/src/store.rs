@@ -751,18 +751,8 @@ impl Store {
                 .ok_or_else(|| anyhow::anyhow!("Profile path is not valid UTF-8"))?,
         )?;
 
-        // Manually declare the FFI function since bindings aren't regenerated yet
-        extern "C" {
-            fn nix_store_create_generation(
-                context: *mut raw::c_context,
-                store: *mut raw::Store,
-                profile: *const std::os::raw::c_char,
-                out_path: *mut raw::StorePath,
-            ) -> raw::err;
-        }
-
         unsafe {
-            check_call!(nix_store_create_generation(
+            check_call!(raw::store_create_generation(
                 &mut self.context,
                 self.inner.ptr(),
                 profile_cstring.as_ptr(),
@@ -791,17 +781,8 @@ impl Store {
                 .ok_or_else(|| anyhow::anyhow!("Profile path is not valid UTF-8"))?,
         )?;
 
-        // Manually declare the FFI function since bindings aren't regenerated yet
-        extern "C" {
-            fn nix_store_delete_old_generations(
-                context: *mut raw::c_context,
-                profile: *const std::os::raw::c_char,
-                dry_run: bool,
-            ) -> raw::err;
-        }
-
         unsafe {
-            check_call!(nix_store_delete_old_generations(
+            check_call!(raw::store_delete_old_generations(
                 &mut self.context,
                 profile_cstring.as_ptr(),
                 dry_run
