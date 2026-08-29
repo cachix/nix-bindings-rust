@@ -28,6 +28,29 @@ impl FlakeSettings {
         let s = unsafe { context::check_call!(raw::flake_settings_new(&mut ctx)) }?;
         Ok(FlakeSettings { ptr: s })
     }
+
+    /// Override one setting on this flake settings object.
+    ///
+    /// Use `extra-<setting name>` as the key to append to the current value.
+    pub fn set(&self, key: &str, value: &str) -> Result<()> {
+        let key = CString::new(key)?;
+        let value = CString::new(value)?;
+        let mut ctx = Context::new();
+        unsafe {
+            let settings =
+                context::check_call!(raw::flake_settings_as_abstract_settings(&mut ctx, self.ptr))?;
+            let result = context::check_call!(raw::abstract_settings_set(
+                &mut ctx,
+                settings,
+                key.as_ptr(),
+                value.as_ptr()
+            ));
+            raw::abstract_settings_free(settings);
+            result?;
+        }
+        Ok(())
+    }
+
     fn add_to_eval_state_builder(
         &self,
         builder: &mut nix_bindings_expr::eval_state::EvalStateBuilder,
@@ -46,7 +69,10 @@ impl FlakeSettings {
 
 pub trait EvalStateBuilderExt {
     /// Configures the eval state to provide flakes features such as `builtins.getFlake`.
-    fn flakes(self, settings: &FlakeSettings) -> Result<nix_bindings_expr::eval_state::EvalStateBuilder>;
+    fn flakes(
+        self,
+        settings: &FlakeSettings,
+    ) -> Result<nix_bindings_expr::eval_state::EvalStateBuilder>;
 }
 impl EvalStateBuilderExt for nix_bindings_expr::eval_state::EvalStateBuilder {
     /// Configures the eval state to provide flakes features such as `builtins.getFlake`.
@@ -103,11 +129,13 @@ impl FlakeReferenceParseFlags {
     pub fn set_preserve_relative_paths(&mut self, preserve: bool) -> Result<()> {
         let mut ctx = Context::new();
         unsafe {
-            context::check_call!(raw::flake_reference_parse_flags_set_preserve_relative_paths(
-                &mut ctx,
-                self.ptr.as_ptr(),
-                preserve
-            ))
+            context::check_call!(
+                raw::flake_reference_parse_flags_set_preserve_relative_paths(
+                    &mut ctx,
+                    self.ptr.as_ptr(),
+                    preserve
+                )
+            )
         }?;
         Ok(())
     }
@@ -259,9 +287,7 @@ impl FlakeLockFlags {
         let mut ctx = Context::new();
         unsafe {
             context::check_call!(raw::flake_lock_flags_set_recreate_lock_file(
-                &mut ctx,
-                self.ptr,
-                recreate
+                &mut ctx, self.ptr, recreate
             ))
         }?;
         Ok(())
@@ -671,7 +697,11 @@ impl LockFileInputsIterator {
     ///
     /// For "follows" inputs (InputAttrPath), returns `None` since they inherit
     /// their fingerprint from the target input.
-    pub fn fingerprint(&self, fetch_settings: &FetchersSettings, store: &Store) -> Result<Option<String>> {
+    pub fn fingerprint(
+        &self,
+        fetch_settings: &FetchersSettings,
+        store: &Store,
+    ) -> Result<Option<String>> {
         let mut ctx = Context::new();
         let mut r = result_string_init!();
         unsafe {
@@ -949,6 +979,13 @@ mod tests {
         assert_eq!(b, true);
 
         drop(gc_registration);
+    }
+
+    #[test]
+    fn flake_settings_can_be_overridden() {
+        init();
+        let settings = FlakeSettings::new().unwrap();
+        settings.set("use-registries", "false").unwrap();
     }
 
     #[test]
