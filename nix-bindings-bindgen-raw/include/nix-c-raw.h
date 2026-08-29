@@ -5,6 +5,7 @@
 #define GC_THREADS
 #include <gc/gc.h>
 #include <nix_api_expr.h>
+#include <nix_api_external.h>
 #include <nix_api_value.h>
 #include <nix_api_attr_cursor.h>
 #include <nix_api_search.h>
