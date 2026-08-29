@@ -75,12 +75,21 @@ pub type OnActivityResult = Arc<dyn Fn(u64, &str, &[i32], &[i64], &[Option<&str>
 /// - `msg`: The log message
 pub type OnLog = Arc<dyn Fn(i32, &str) + Send + Sync>;
 
+/// A closure that handles evaluator dependency events.
+///
+/// Arguments:
+/// - `kind`: The kind of dependency that was observed
+/// - `subject`: The file, environment variable, or other dependency
+/// - `detail`: Optional extra information about the dependency
+pub type OnEvalEffect = Arc<dyn Fn(&str, &str, Option<&str>) + Send + Sync>;
+
 /// Builder for setting up activity callbacks
 pub struct ActivityLoggerBuilder {
     on_start: Option<OnActivityStart>,
     on_stop: Option<OnActivityStop>,
     on_result: Option<OnActivityResult>,
     on_log: Option<OnLog>,
+    on_eval_effect: Option<OnEvalEffect>,
 }
 
 impl ActivityLoggerBuilder {
@@ -91,6 +100,7 @@ impl ActivityLoggerBuilder {
             on_stop: None,
             on_result: None,
             on_log: None,
+            on_eval_effect: None,
         }
     }
 
@@ -130,6 +140,15 @@ impl ActivityLoggerBuilder {
         self
     }
 
+    /// Set the callback for evaluator dependency events.
+    pub fn on_eval_effect<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&str, &str, Option<&str>) + Send + Sync + 'static,
+    {
+        self.on_eval_effect = Some(Arc::new(callback));
+        self
+    }
+
     /// Register the callbacks with Nix
     ///
     /// This must be called before any Nix operations that generate activities.
@@ -139,10 +158,12 @@ impl ActivityLoggerBuilder {
             on_stop: self.on_stop,
             on_result: self.on_result,
             on_log: self.on_log,
+            on_eval_effect: self.on_eval_effect,
         });
 
-        // Create raw pointers for C callbacks
-        let data_ptr = Arc::into_raw(data.clone()) as *mut c_void;
+        // The returned ActivityLogger keeps this allocation alive until after
+        // its callbacks have been removed from Nix.
+        let data_ptr = Arc::as_ptr(&data).cast_mut().cast::<c_void>();
 
         unsafe {
             // C callback that forwards to Rust closure for activity start
@@ -172,8 +193,12 @@ impl ActivityLoggerBuilder {
                                             && !int_values.is_null()
                                             && !string_values.is_null()
                                         {
-                                            let ft = std::slice::from_raw_parts(field_types, field_count);
-                                            let iv = std::slice::from_raw_parts(int_values, field_count);
+                                            let ft = std::slice::from_raw_parts(
+                                                field_types,
+                                                field_count,
+                                            );
+                                            let iv =
+                                                std::slice::from_raw_parts(int_values, field_count);
                                             let mut sv = Vec::with_capacity(field_count);
                                             for i in 0..field_count {
                                                 let ptr = *string_values.add(i);
@@ -286,6 +311,39 @@ impl ActivityLoggerBuilder {
                 }
             }
 
+            extern "C" fn on_eval_effect_callback(
+                kind: *const std::os::raw::c_char,
+                kind_len: usize,
+                subject: *const std::os::raw::c_char,
+                subject_len: usize,
+                detail: *const std::os::raw::c_char,
+                detail_len: usize,
+                user_data: *mut c_void,
+            ) {
+                if let Some(data) = unsafe { (user_data as *mut LoggerCallbackData).as_ref() } {
+                    if let Some(ref callback) = data.on_eval_effect {
+                        let Some(kind) = (unsafe { string_view(kind, kind_len) }) else {
+                            return;
+                        };
+                        let Some(subject) = (unsafe { string_view(subject, subject_len) }) else {
+                            return;
+                        };
+                        callback(kind, subject, unsafe { string_view(detail, detail_len) });
+                    }
+                }
+            }
+
+            unsafe fn string_view<'a>(
+                value: *const std::os::raw::c_char,
+                len: usize,
+            ) -> Option<&'a str> {
+                if value.is_null() {
+                    return None;
+                }
+                let bytes = unsafe { std::slice::from_raw_parts(value.cast::<u8>(), len) };
+                std::str::from_utf8(bytes).ok()
+            }
+
             // Call the C API
             let err = raw::set_logger_callbacks(
                 context.ptr(),
@@ -297,9 +355,26 @@ impl ActivityLoggerBuilder {
             );
 
             if err != raw::err_NIX_OK {
-                // Clean up on error
-                let _ = Arc::from_raw(data_ptr as *mut LoggerCallbackData);
                 anyhow::bail!("set_logger_callbacks failed with error code {}", err);
+            }
+
+            if data.on_eval_effect.is_some() {
+                let err = raw::set_eval_effect_callback(
+                    context.ptr(),
+                    Some(on_eval_effect_callback),
+                    data_ptr,
+                );
+                if err != raw::err_NIX_OK {
+                    raw::set_logger_callbacks(
+                        context.ptr(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        std::ptr::null_mut(),
+                    );
+                    anyhow::bail!("set_eval_effect_callback failed with error code {}", err);
+                }
             }
         }
 
@@ -319,6 +394,7 @@ struct LoggerCallbackData {
     on_stop: Option<OnActivityStop>,
     on_result: Option<OnActivityResult>,
     on_log: Option<OnLog>,
+    on_eval_effect: Option<OnEvalEffect>,
 }
 
 /// Active logger that holds callback data alive
@@ -384,14 +460,7 @@ impl Drop for ActivityLogger {
         // is dropped to avoid use-after-free.
         unsafe {
             let mut context = Context::new();
-            raw::set_logger_callbacks(
-                context.ptr(),
-                None,
-                None,
-                None,
-                None,
-                std::ptr::null_mut(),
-            );
+            raw::set_logger_callbacks(context.ptr(), None, None, None, None, std::ptr::null_mut());
         }
     }
 }
@@ -406,12 +475,14 @@ mod tests {
             .on_start(|_id, _desc, _ty, _ftypes, _ints, _strs, _parent| {})
             .on_stop(|_id| {})
             .on_result(|_id, _ty, _ftypes, _ints, _strs| {})
-            .on_log(|_level, _msg| {});
+            .on_log(|_level, _msg| {})
+            .on_eval_effect(|_kind, _subject, _detail| {});
 
         assert!(builder.on_start.is_some());
         assert!(builder.on_stop.is_some());
         assert!(builder.on_result.is_some());
         assert!(builder.on_log.is_some());
+        assert!(builder.on_eval_effect.is_some());
     }
 
     #[test]
@@ -419,7 +490,7 @@ mod tests {
         // This test verifies that dropping an ActivityLogger properly clears
         // the callbacks from the C++ side, preventing "pure virtual function called"
         // crashes when Nix tries to call freed callbacks.
-        use crate::eval_state::{EvalStateBuilder, gc_register_my_thread, init};
+        use crate::eval_state::{gc_register_my_thread, init, EvalStateBuilder};
         use nix_bindings_store::store::Store;
 
         init().expect("Failed to initialize Nix");
