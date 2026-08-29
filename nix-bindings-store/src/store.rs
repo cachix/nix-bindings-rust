@@ -405,6 +405,60 @@ impl Store {
         }
     }
 
+    /// Read a derivation from its path in this store.
+    #[cfg(nix_at_least = "2.33")]
+    #[doc(alias = "nix_store_drv_from_store_path")]
+    pub fn derivation_from_store_path(&mut self, path: &StorePath) -> Result<Derivation> {
+        let derivation = unsafe {
+            check_call!(raw::store_drv_from_store_path(
+                &mut self.context,
+                self.inner.ptr(),
+                path.as_ptr()
+            ))?
+        };
+        let derivation = NonNull::new(derivation)
+            .ok_or_else(|| Error::msg("store_drv_from_store_path returned null"))?;
+        Ok(Derivation::new_raw(derivation))
+    }
+
+    /// Find a store path from its encoded hash part.
+    #[cfg(nix_at_least = "2.33")]
+    #[doc(alias = "nix_store_query_path_from_hash_part")]
+    pub fn query_path_from_hash_part(&mut self, hash: &str) -> Result<Option<StorePath>> {
+        let hash = CString::new(hash)?;
+        let path = unsafe {
+            check_call!(raw::store_query_path_from_hash_part(
+                &mut self.context,
+                self.inner.ptr(),
+                hash.as_ptr()
+            ))?
+        };
+        Ok(NonNull::new(path).map(|path| unsafe { StorePath::new_raw(path) }))
+    }
+
+    /// Copy one store path to another store.
+    #[cfg(nix_at_least = "2.33")]
+    #[doc(alias = "nix_store_copy_path")]
+    pub fn copy_path(
+        &mut self,
+        destination: &Store,
+        path: &StorePath,
+        repair: bool,
+        check_signatures: bool,
+    ) -> Result<()> {
+        unsafe {
+            check_call!(raw::store_copy_path(
+                &mut self.context,
+                self.inner.ptr(),
+                destination.inner.ptr(),
+                path.as_ptr(),
+                repair,
+                check_signatures
+            ))?;
+        }
+        Ok(())
+    }
+
     /// Build a derivation and return its outputs.
     ///
     /// **Requires Nix 2.33 or later.**
@@ -653,6 +707,25 @@ impl Store {
             ))
         }?;
         Ok(())
+    }
+
+    /// Delete an unreferenced path from a local store and return the bytes freed.
+    #[doc(alias = "nix_store_delete_path")]
+    pub fn delete_path(&mut self, path: &Path) -> Result<u64> {
+        let path = CString::new(
+            path.to_str()
+                .ok_or_else(|| Error::msg("Store path is not valid UTF-8"))?,
+        )?;
+        let mut bytes_freed = 0;
+        unsafe {
+            check_call!(raw::store_delete_path(
+                &mut self.context,
+                self.inner.ptr(),
+                path.as_ptr(),
+                &mut bytes_freed
+            ))?;
+        }
+        Ok(bytes_freed)
     }
 
     /// Create a new generation of a profile
@@ -1064,10 +1137,11 @@ mod tests {
 
     fn create_temp_store() -> (Store, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().canonicalize().unwrap();
 
-        let store_dir = temp_dir.path().join("store");
-        let state_dir = temp_dir.path().join("state");
-        let log_dir = temp_dir.path().join("log");
+        let store_dir = temp_path.join("store");
+        let state_dir = temp_path.join("state");
+        let log_dir = temp_path.join("log");
 
         let store_dir_str = store_dir.to_str().unwrap();
         let state_dir_str = state_dir.to_str().unwrap();
@@ -1103,8 +1177,7 @@ mod tests {
                     "out": "/1rz4g4znpzjwh1xymhjpm42vipw92pr73vdgl6xs1hycac8kf2n9",
                     "system": "{}"
                 }},
-                "inputDrvs": {{}},
-                "inputSrcs": [],
+                "inputs": {{ "drvs": {{}}, "srcs": [] }},
                 "name": "myname",
                 "outputs": {{
                     "out": {{
@@ -1113,7 +1186,7 @@ mod tests {
                     }}
                 }},
                 "system": "{}",
-                "version": 3
+                "version": 4
             }}"#,
             system, system
         )
@@ -1125,7 +1198,9 @@ mod tests {
         let (mut store, temp_dir) = create_temp_store();
         let drv_json = create_test_derivation_json();
         let drv = store.derivation_from_json(&drv_json).unwrap();
-        // If we got here, parsing succeeded
+        let cloned = drv.clone();
+        assert_eq!(drv.to_json().unwrap(), cloned.to_json().unwrap());
+
         drop(drv);
         drop(store);
         drop(temp_dir);
@@ -1159,6 +1234,61 @@ mod tests {
 
     #[test]
     #[cfg(nix_at_least = "2.33")]
+    fn derivation_and_hash_lookups() {
+        let (mut store, temp_dir) = create_temp_store();
+        let drv = store
+            .derivation_from_json(&create_test_derivation_json())
+            .unwrap();
+        let drv_path = store.add_derivation(&drv).unwrap();
+
+        let stored_drv = store.derivation_from_store_path(&drv_path).unwrap();
+        assert_eq!(stored_drv.to_json().unwrap(), drv.to_json().unwrap());
+
+        let real_path = store.real_path(&drv_path).unwrap();
+        let file_name = Path::new(&real_path).file_name().unwrap().to_str().unwrap();
+        let hash = file_name.split_once('-').unwrap().0;
+        let found = store
+            .query_path_from_hash_part(hash)
+            .unwrap()
+            .expect("the derivation path should be found by its hash");
+        assert_eq!(found.name().unwrap(), drv_path.name().unwrap());
+
+        assert!(store
+            .query_path_from_hash_part("00000000000000000000000000000000")
+            .unwrap()
+            .is_none());
+
+        drop(store);
+        drop(temp_dir);
+    }
+
+    #[test]
+    #[cfg(nix_at_least = "2.33")]
+    fn copy_and_delete_path() {
+        let (mut source, source_dir) = create_temp_store();
+        let (destination, destination_dir) = create_temp_store();
+        let drv = source
+            .derivation_from_json(&create_test_derivation_json())
+            .unwrap();
+        let drv_path = source.add_derivation(&drv).unwrap();
+
+        source
+            .copy_path(&destination, &drv_path, false, false)
+            .unwrap();
+        let source_path = source.real_path(&drv_path).unwrap();
+        assert!(Path::new(&source_path).exists());
+
+        source.delete_path(Path::new(&source_path)).unwrap();
+        assert!(!Path::new(&source_path).exists());
+
+        drop(source);
+        drop(destination);
+        drop(source_dir);
+        drop(destination_dir);
+    }
+
+    #[test]
+    #[cfg(nix_at_least = "2.33")]
     fn realise() {
         let (mut store, temp_dir) = create_temp_store();
         let drv_json = create_test_derivation_json();
@@ -1185,7 +1315,7 @@ mod tests {
 
         format!(
             r#"{{
-                "version": 3,
+                "version": 4,
                 "name": "multi-output-test",
                 "system": "{}",
                 "builder": "/bin/sh",
@@ -1205,8 +1335,7 @@ mod tests {
                     "outj": "/0gkw1366qklqfqb2lw1pikgdqh3cmi3nw6f1z04an44ia863nxaz",
                     "outa": "/039akv9zfpihrkrv4pl54f3x231x362bll9afblsgfqgvx96h198"
                 }},
-                "inputDrvs": {{}},
-                "inputSrcs": [],
+                "inputs": {{ "drvs": {{}}, "srcs": [] }},
                 "outputs": {{
                     "outd": {{ "hashAlgo": "sha256", "method": "nar" }},
                     "outf": {{ "hashAlgo": "sha256", "method": "nar" }},
@@ -1263,8 +1392,7 @@ mod tests {
                     "out": "/1rz4g4znpzjwh1xymhjpm42vipw92pr73vdgl6xs1hycac8kf2n9",
                     "system": "{}"
                 }},
-                "inputDrvs": {{}},
-                "inputSrcs": [],
+                "inputs": {{ "drvs": {{}}, "srcs": [] }},
                 "name": "myname",
                 "outputs": {{
                     "out": {{
@@ -1273,7 +1401,7 @@ mod tests {
                     }}
                 }},
                 "system": "{}",
-                "version": 3
+                "version": 4
             }}"#,
             system, system
         );
@@ -1316,8 +1444,7 @@ mod tests {
                     "out": "/1rz4g4znpzjwh1xymhjpm42vipw92pr73vdgl6xs1hycac8kf2n9",
                     "system": "{}"
                 }},
-                "inputDrvs": {{}},
-                "inputSrcs": [],
+                "inputs": {{ "drvs": {{}}, "srcs": [] }},
                 "name": "failing",
                 "outputs": {{
                     "out": {{
@@ -1326,7 +1453,7 @@ mod tests {
                     }}
                 }},
                 "system": "{}",
-                "version": 3
+                "version": 4
             }}"#,
             system, system
         );
@@ -1369,8 +1496,7 @@ mod tests {
                     "out": "/1rz4g4znpzjwh1xymhjpm42vipw92pr73vdgl6xs1hycac8kf2n9",
                     "system": "{}"
                 }},
-                "inputDrvs": {{}},
-                "inputSrcs": [],
+                "inputs": {{ "drvs": {{}}, "srcs": [] }},
                 "name": "no-output",
                 "outputs": {{
                     "out": {{
@@ -1379,7 +1505,7 @@ mod tests {
                     }}
                 }},
                 "system": "{}",
-                "version": 3
+                "version": 4
             }}"#,
             system, system
         );
