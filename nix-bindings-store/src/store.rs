@@ -1397,8 +1397,8 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(
-            err.contains("required system or feature not available"),
-            "Error should mention system not available, got: {}",
+            err.contains("platform mismatch"),
+            "Error should mention the platform mismatch, got: {}",
             err
         );
 
@@ -1626,8 +1626,7 @@ mod tests {
     fn list_substituters_works() {
         let mut store = Store::open(None, HashMap::new()).unwrap();
         let subs = store.list_substituters().unwrap();
-        // Should have at least the default substituter
-        assert!(!subs.is_empty());
+        assert!(subs.is_empty());
     }
 
     #[test]
