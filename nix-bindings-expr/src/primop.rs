@@ -4,7 +4,6 @@ use anyhow::Result;
 use nix_bindings_bindgen_raw as raw;
 use nix_bindings_util::check_call;
 use std::ffi::{c_int, c_void, CStr, CString};
-use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 
 /// Metadata for a primop, used with `PrimOp::new`.
@@ -48,18 +47,12 @@ impl PrimOp {
         }
         args.push(null());
 
-        // Primops weren't meant to be dynamically created, as of writing.
-        // This leaks, and so do the primop fields in Nix internally.
-        let user_data = {
-            // We'll be leaking this Box.
-            // TODO: Use the GC with finalizer, if possible.
-            let user_data = ManuallyDrop::new(Box::new(PrimOpContext {
-                arity: N,
-                function: Box::new(move |eval_state, args| f(eval_state, args.try_into().unwrap())),
-                eval_state: eval_state.weak_ref(),
-            }));
-            user_data.as_ref() as *const PrimOpContext as *mut c_void
-        };
+        let user_data = Box::new(PrimOpContext {
+            arity: N,
+            function: Box::new(move |eval_state, args| f(eval_state, args.try_into().unwrap())),
+            eval_state: eval_state.weak_ref(),
+        });
+        let user_data_ptr = user_data.as_ref() as *const PrimOpContext as *mut c_void;
         let op = unsafe {
             check_call!(raw::alloc_primop(
                 &mut eval_state.context,
@@ -68,9 +61,13 @@ impl PrimOp {
                 meta.name.as_ptr(),
                 args.as_mut_ptr(), /* TODO add an extra const to bindings to avoid mut here. */
                 meta.doc.as_ptr(),
-                user_data
+                user_data_ptr
             ))?
         };
+        let user_data_ptr = Box::into_raw(user_data) as *mut c_void;
+        unsafe {
+            raw::gc_register_finalizer(op as *mut c_void, user_data_ptr, Some(drop_primop_context));
+        }
         Ok(PrimOp { ptr: op })
     }
 }
@@ -80,6 +77,10 @@ struct PrimOpContext {
     arity: usize,
     function: Box<dyn Fn(&mut EvalState, &[Value]) -> Result<Value>>,
     eval_state: EvalStateWeak,
+}
+
+unsafe extern "C" fn drop_primop_context(_obj: *mut c_void, user_data: *mut c_void) {
+    drop(Box::from_raw(user_data as *mut PrimOpContext));
 }
 
 unsafe extern "C" fn function_adapter(
