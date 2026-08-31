@@ -144,6 +144,7 @@ use std::ffi::{c_char, CString};
 use std::iter::FromIterator;
 use std::os::raw::c_uint;
 use std::ptr::{null, null_mut, NonNull};
+use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 lazy_static! {
@@ -1362,21 +1363,51 @@ pub fn gc_now() {
 
 /// RAII guard for thread registration with the garbage collector.
 ///
-/// Automatically unregisters the thread when dropped.
+/// Automatically unregisters the thread when dropped. Registrations are
+/// thread-affine, so the guard is neither `Send` nor `Sync`.
+///
+/// ```compile_fail
+/// use nix_bindings_expr::eval_state::ThreadRegistrationGuard;
+/// fn assert_send<T: Send>() {}
+/// assert_send::<ThreadRegistrationGuard>();
+/// ```
 pub struct ThreadRegistrationGuard {
     must_unregister: bool,
+    _thread_affine: std::marker::PhantomData<Rc<()>>,
 }
+
+impl ThreadRegistrationGuard {
+    fn unregister_inner(&mut self) -> Result<()> {
+        if !self.must_unregister {
+            return Ok(());
+        }
+
+        let result = unsafe { raw::GC_unregister_my_thread() };
+        self.must_unregister = false;
+        if result as u32 != raw::GC_SUCCESS {
+            return Err(anyhow::format_err!(
+                "GC_unregister_my_thread failed: {}",
+                result
+            ));
+        }
+        Ok(())
+    }
+
+    /// Unregister the current thread and report any collector error.
+    pub fn unregister(mut self) -> Result<()> {
+        self.unregister_inner()
+    }
+}
+
 impl Drop for ThreadRegistrationGuard {
     fn drop(&mut self) {
-        if self.must_unregister {
-            unsafe {
-                raw::GC_unregister_my_thread();
-            }
+        if let Err(error) = self.unregister_inner() {
+            eprintln!("warning: failed to unregister thread from Boehm GC: {error}");
         }
     }
 }
 
-fn gc_register_my_thread_do_it() -> Result<()> {
+fn gc_register_my_thread_do_it() -> Result<bool> {
     unsafe {
         let mut sb: raw::GC_stack_base = raw::GC_stack_base {
             mem_base: null_mut(),
@@ -1385,8 +1416,15 @@ fn gc_register_my_thread_do_it() -> Result<()> {
         if r as u32 != raw::GC_SUCCESS {
             Err(anyhow::format_err!("GC_get_stack_base failed: {}", r))?;
         }
-        raw::GC_register_my_thread(&sb);
-        Ok(())
+        let result = raw::GC_register_my_thread(&sb) as u32;
+        match result {
+            raw::GC_SUCCESS => Ok(true),
+            raw::GC_DUPLICATE => Ok(false),
+            _ => Err(anyhow::format_err!(
+                "GC_register_my_thread failed: {}",
+                result
+            )),
+        }
     }
 }
 
@@ -1400,11 +1438,13 @@ pub fn gc_register_my_thread() -> Result<ThreadRegistrationGuard> {
         if already_done != 0 {
             return Ok(ThreadRegistrationGuard {
                 must_unregister: false,
+                _thread_affine: std::marker::PhantomData,
             });
         }
-        gc_register_my_thread_do_it()?;
+        let must_unregister = gc_register_my_thread_do_it()?;
         Ok(ThreadRegistrationGuard {
-            must_unregister: true,
+            must_unregister,
+            _thread_affine: std::marker::PhantomData,
         })
     }
 }
