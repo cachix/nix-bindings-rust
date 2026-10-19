@@ -872,40 +872,51 @@ impl EvalState {
         v: &Value,
         attr_name: &str,
     ) -> Result<Option<Value>> {
-        // Split on dots to support nested attribute paths like "config.info"
-        let parts: Vec<&str> = attr_name.split('.').collect();
         let mut current = v.clone();
-
-        for part in parts {
-            let t = self.value_type(&current)?;
-            if t != ValueType::AttrSet {
-                bail!("expected an attrset, but got a {:?}", t);
-            }
-
-            let part_cstr = CString::new(part)
-                .with_context(|| "require_attrs_select_opt: attrName contains null byte")?;
-
-            let v2 = unsafe {
-                check_call_opt_key!(raw::get_attr_byname(
-                    &mut self.context,
-                    current.raw_ptr(),
-                    self.eval_state.as_ptr(),
-                    part_cstr.as_ptr()
-                ))
-            }?;
-
-            match v2 {
-                Some(value) => {
-                    current = unsafe { Value::new(value) };
-                }
-                None => {
-                    // If any part of the path is missing, return None
-                    return Ok(None);
-                }
+        for part in attr_name.split('.') {
+            match self.require_attrs_get_opt(&current, part)? {
+                Some(value) => current = value,
+                None => return Ok(None),
             }
         }
-
         Ok(Some(current))
+    }
+
+    /// Extracts an attribute by its literal name, without splitting on dots.
+    ///
+    /// Forces evaluation and verifies the value is an attribute set.
+    /// Returns an error if the attribute is missing.
+    /// Use [`Self::require_attrs_select`] to traverse a dotted attribute path.
+    pub fn require_attrs_get(&mut self, v: &Value, attr_name: &str) -> Result<Value> {
+        self.require_attrs_get_opt(v, attr_name)?
+            .with_context(|| format!("attribute `{attr_name}` not found"))
+    }
+
+    /// Extracts an optional attribute by its literal name, without splitting on dots.
+    ///
+    /// Forces evaluation and verifies the value is an attribute set.
+    /// Returns `Ok(None)` if the attribute is missing, and an error if evaluation fails.
+    pub fn require_attrs_get_opt(
+        &mut self,
+        v: &Value,
+        attr_name: &str,
+    ) -> Result<Option<Value>> {
+        let t = self.value_type(v)?;
+        if t != ValueType::AttrSet {
+            bail!("expected an attrset, but got a {:?}", t);
+        }
+
+        let attr_cstr = CString::new(attr_name)
+            .with_context(|| "require_attrs_get_opt: attrName contains null byte")?;
+        let value = unsafe {
+            check_call_opt_key!(raw::get_attr_byname(
+                &mut self.context,
+                v.raw_ptr(),
+                self.eval_state.as_ptr(),
+                attr_cstr.as_ptr()
+            ))
+        }?;
+        Ok(value.map(|value| unsafe { Value::new(value) }))
     }
 
     /// Returns the number of elements in a [list][`ValueType::List`] Nix value.
@@ -1769,6 +1780,40 @@ mod tests {
             }
         })
         .unwrap()
+    }
+
+    #[test]
+    fn eval_state_require_attrs_get_literal_names() {
+        gc_registering_current_thread(|| {
+            let store = Store::open(None, HashMap::new()).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
+            let v = es
+                .eval_from_string(
+                    r#"{ "a.b" = "literal"; a.b = "nested"; "" = "empty"; }"#,
+                    "<test>",
+                )
+                .unwrap();
+            let literal = es.require_attrs_get(&v, "a.b").unwrap();
+            assert_eq!(es.require_string(&literal).unwrap(), "literal");
+            let nested = es.require_attrs_select(&v, "a.b").unwrap();
+            assert_eq!(es.require_string(&nested).unwrap(), "nested");
+            let empty = es.require_attrs_get(&v, "").unwrap();
+            assert_eq!(es.require_string(&empty).unwrap(), "empty");
+            assert!(es
+                .require_attrs_get_opt(&v, "missing.key")
+                .unwrap()
+                .is_none());
+            assert!(es.require_attrs_get(&v, "missing.key").is_err());
+            assert!(es.require_attrs_get(&v, "a\0b").is_err());
+            let non_attrs = es.eval_from_string("1", "<test>").unwrap();
+            assert!(es.require_attrs_get(&non_attrs, "a").is_err());
+            let thunk = es
+                .eval_from_string(r#"let f = x: { "a.b" = x; }; in f "forced""#, "<test>")
+                .unwrap();
+            let attr = es.require_attrs_get(&thunk, "a.b").unwrap();
+            assert_eq!(es.require_string(&attr).unwrap(), "forced");
+        })
+        .unwrap();
     }
 
     #[test]

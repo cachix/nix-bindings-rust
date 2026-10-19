@@ -152,7 +152,7 @@ fn value_to_json_inner(
 
             let mut json_obj = serde_json::Map::new();
             for attr_name in attr_names {
-                match eval_state.require_attrs_select(value, &attr_name) {
+                match eval_state.require_attrs_get(value, &attr_name) {
                     Ok(attr_value) => {
                         // Force the attribute value before processing
                         // This ensures thunks are evaluated before type checking
@@ -269,6 +269,46 @@ mod tests {
 
         let expected = json!({"a": 1, "b": "x"});
         assert_eq!(json, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_value_to_json_literal_attribute_names() -> Result<()> {
+        let store = Store::open(None, [])?;
+        let mut eval_state = EvalStateBuilder::new(store)?.build()?;
+        let value = eval_state.eval_from_string(
+            r#"{
+                install.encryptionKeys."/tmp/luks.key" = "secrets/luks.key";
+                install.extraFiles."/etc/a.conf".source = "secrets/a.conf";
+                "" = 0;
+                "." = 1;
+                "a..b" = 2;
+            }"#,
+            ".",
+        )?;
+        let json = value_to_json(&mut eval_state, &value)?;
+        assert_eq!(json, json!({
+            "install": {
+                "encryptionKeys": {"/tmp/luks.key": "secrets/luks.key"},
+                "extraFiles": {"/etc/a.conf": {"source": "secrets/a.conf"}}
+            },
+            "": 0,
+            ".": 1,
+            "a..b": 2
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn test_value_to_json_dotted_name_does_not_select_nested_path() -> Result<()> {
+        let store = Store::open(None, [])?;
+        let mut eval_state = EvalStateBuilder::new(store)?.build()?;
+        let value = eval_state.eval_from_string(
+            r#"{ "a.b" = "literal"; a.b = "nested"; }"#,
+            ".",
+        )?;
+        let json = value_to_json(&mut eval_state, &value)?;
+        assert_eq!(json, json!({"a.b": "literal", "a": {"b": "nested"}}));
         Ok(())
     }
 
