@@ -372,6 +372,17 @@ impl FlakeInput {
         Ok(FlakeInput { ptr })
     }
 
+    /// Create an input with no reference or follows target.
+    ///
+    /// Use this to attach overrides to a nested input without replacing its
+    /// upstream source, or to construct a follows-only input.
+    pub fn new_empty() -> Result<Self> {
+        let mut ctx = Context::new();
+        let ptr = unsafe { context::check_call!(raw::flake_input_new_empty(&mut ctx)) }?;
+        let ptr = NonNull::new(ptr).context("flake_input_new_empty unexpectedly returned null")?;
+        Ok(Self { ptr })
+    }
+
     /// Set this input to follow another input's version
     pub fn set_follows(&mut self, follows_path: &str) -> Result<()> {
         let mut ctx = Context::new();
@@ -392,9 +403,7 @@ impl FlakeInput {
     /// For example, to make git-hooks.inputs.nixpkgs follow the root nixpkgs:
     /// ```ignore
     /// let mut overrides = FlakeInputs::new()?;
-    /// // Use follows target name as placeholder reference (gets cleared by set_follows)
-    /// let (nixpkgs_ref, _) = FlakeReference::parse(..., "nixpkgs")?;
-    /// let mut nixpkgs_override = FlakeInput::new(&nixpkgs_ref, true)?;
+    /// let mut nixpkgs_override = FlakeInput::new_empty()?;
     /// nixpkgs_override.set_follows("nixpkgs")?;
     /// overrides.add("nixpkgs", nixpkgs_override)?;
     /// git_hooks_input.set_overrides(overrides)?;
